@@ -4,6 +4,7 @@ const os = require("node:os");
 const fs = require("node:fs");
 const backend = require("./backend.cjs");
 const voiceTranscribe = require("./voiceTranscribe.cjs");
+const cliDetect = require("./cliDetect.cjs");
 const store = require("./store.cjs");
 const platform = require("./platform/index.cjs");
 const micAccess = require("./platform/micAccess.cjs");
@@ -847,6 +848,8 @@ ipcMain.handle("peek:platform-info", () => ({
   loginItemLabel: platform.loginItemLabel(),
   modifierHints: platform.modifierHintLabels(),
 }));
+
+ipcMain.handle("peek:backends:list", (_e, opts) => cliDetect.listBackends(opts || {}));
 
 ipcMain.handle("peek:login-item:get", () => app.getLoginItemSettings().openAtLogin);
 ipcMain.handle("peek:login-item:set", (_e, on) => {

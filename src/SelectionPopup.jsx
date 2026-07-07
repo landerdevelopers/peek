@@ -9,7 +9,9 @@ import {
   IconClose, IconPeek, IconSettings, IconArrowUp,
 } from "./Icons.jsx";
 
-const BACKEND_KEY = "peek-backend";
+import { BACKEND_KEY, resolveBackend, INSTALL_CLI_MESSAGE } from "./backends.js";
+import { useInstalledBackends } from "./useInstalledBackends.js";
+
 const POPUP_WIDTH = 420;
 
 function stripRefineOutput(text) {
@@ -58,7 +60,7 @@ const closeBtnStyle = {
 export default function SelectionPopup({
   selectedText, selectionPos, onClear,
 }) {
-  const [backend] = useState(() => localStorage.getItem(BACKEND_KEY) || "claude");
+  const { available: installedBackends } = useInstalledBackends();
   const [view, setView] = useState("palette"); // "palette" | "answer" | "chat"
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteHighlight, setPaletteHighlight] = useState(0);
@@ -95,6 +97,11 @@ export default function SelectionPopup({
 
   const runPrompt = async (instruction, label) => {
     if (busy) return;
+    const backend = resolveBackend(localStorage.getItem(BACKEND_KEY), installedBackends);
+    if (!backend) {
+      setError(INSTALL_CLI_MESSAGE);
+      return;
+    }
     setBusy(true);
     setError(null);
     setActionLabel(label);
@@ -190,6 +197,11 @@ export default function SelectionPopup({
   const sendChat = async () => {
     const question = chatInput.trim();
     if (!question || chatBusy) return;
+    const backend = resolveBackend(localStorage.getItem(BACKEND_KEY), installedBackends);
+    if (!backend) {
+      setError(INSTALL_CLI_MESSAGE);
+      return;
+    }
     setChatInput("");
     setChatBusy(true);
     const history = chatThread.map((t) => ({ q: t.q, a: t.a }));

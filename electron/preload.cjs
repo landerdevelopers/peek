@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld("peekDesktop", {
   submitHotkey: (accel) => ipcRenderer.invoke("peek:submit-hotkey", accel),
   getHotkey: () => ipcRenderer.invoke("peek:hotkey:get"),
   getPlatformInfo: () => ipcRenderer.invoke("peek:platform-info"),
+  listBackends: (opts) => ipcRenderer.invoke("peek:backends:list", opts),
   whoami: () => ipcRenderer.invoke("peek:whoami"),
   sessions: {
     list: () => ipcRenderer.invoke("peek:sessions:list"),

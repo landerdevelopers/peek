@@ -3,6 +3,9 @@ import { LIGHT, USER_BUBBLE } from "./theme.js";
 import ChatTurn, { ThinkingBubble } from "./ChatTurn.jsx";
 import Settings from "./Settings.jsx";
 import PillDropdown from "./PillDropdown.jsx";
+import BackendPicker from "./BackendPicker.jsx";
+import { BACKEND_KEY, resolveBackend, INSTALL_CLI_MESSAGE } from "./backends.js";
+import { useInstalledBackends } from "./useInstalledBackends.js";
 import { useVoiceInput } from "./useVoiceInput.js";
 import {
   IconSearch, IconMenu, IconPeek, IconMinimize, IconMaximize, IconClose,
@@ -12,13 +15,6 @@ import {
 import { OCR_PROMPT } from "./prompts.js";
 import { fmtAccel, loadPlatformInfo } from "./accelFormat.js";
 
-const BACKEND_OPTIONS = [
-  { value: "claude", label: "Claude Code" },
-  { value: "codex", label: "Codex" },
-];
-// Shared with Panel.jsx (the hotkey overlay) via localStorage — both windows
-// load the same origin, so this key is the app-wide "last used backend".
-const BACKEND_KEY = "peek-backend";
 const SIDEBAR_W = 224;
 const CHAT_COL_W = 680; // matches the composer's fixed width so thread + input line up
 // Flat #F7F7F7/#E7E7E7 match the card tones the Figma composer redesign
@@ -67,7 +63,8 @@ export default function Dashboard() {
   const [attachment, setAttachment] = useState(null); // {imagePath, thumbDataUrl} — pending, not yet sent
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [backend, setBackend] = useState(() => localStorage.getItem(BACKEND_KEY) || "claude");
+  const [backend, setBackend] = useState(() => localStorage.getItem(BACKEND_KEY) || "");
+  const { available: installedBackends, loading: backendsLoading, hasAny: hasBackend } = useInstalledBackends();
   const [view, setView] = useState("chat"); // chat | settings
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -88,6 +85,12 @@ export default function Dashboard() {
   useEffect(() => { window.peekDesktop.whoami().then(setUsername).catch(() => {}); }, []);
   useEffect(() => { window.peekDesktop.getHotkey().then(setHotkey).catch(() => {}); }, []);
   useEffect(() => { localStorage.setItem(BACKEND_KEY, backend); }, [backend]);
+  useEffect(() => {
+    if (backendsLoading) return;
+    const next = resolveBackend(backend, installedBackends);
+    if (next && next !== backend) setBackend(next);
+    else if (!next && backend) setBackend("");
+  }, [backendsLoading, installedBackends]);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [thread, busy]);
@@ -115,7 +118,7 @@ export default function Dashboard() {
     setThread((s.thread || []).map((t) => ({ q: t.q, a: t.a })));
     setActiveImage(s.thumbDataUrl || null);
     setActiveImagePath(s.imagePath || null);
-    setBackend(s.backend || "claude");
+    setBackend(s.backend || resolveBackend("", installedBackends) || "");
     setView("chat");
   };
 
@@ -143,7 +146,7 @@ export default function Dashboard() {
 
   const send = async () => {
     const question = input.trim();
-    if (!question || busy) return;
+    if (!question || busy || !backend) return;
     setInput("");
     setBusy(true);
     const history = thread.map((t) => ({ q: t.q, a: t.a }));
@@ -572,13 +575,13 @@ function Composer({ input, setInput, onKeyDown, onSend, busy, backend, setBacken
                 onClick={onExtractText} disabled={extractBusy}
               ><IconScanText /></PillIconBtn>
             )}
-            <PillDropdown value={backend} onChange={setBackend} options={BACKEND_OPTIONS} />
+            <BackendPicker value={backend} onChange={setBackend} />
           </div>
-          <button onClick={onSend} disabled={busy || !input.trim()} style={{
+          <button onClick={onSend} disabled={busy || !input.trim() || !backend} style={{
             width: 44, height: 44, borderRadius: "50%", background: "#000", border: "none",
             boxShadow: "0 6px 16px rgba(0,0,0,0.25)",
             display: "flex", alignItems: "center", justifyContent: "center", cursor: busy ? "default" : "pointer",
-            opacity: busy || !input.trim() ? 0.4 : 1, flexShrink: 0,
+            opacity: busy || !input.trim() || !backend ? 0.4 : 1, flexShrink: 0,
           }}>
             <IconArrowUp style={{ color: "#fff" }} />
           </button>

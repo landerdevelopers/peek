@@ -3,13 +3,10 @@ import { LIGHT } from "./theme.js";
 import { buildAccelerator } from "./hotkeyUtils.js";
 import { fmtAccel, loadPlatformInfo, modifierChips } from "./accelFormat.js";
 import { IconClose, IconSettings, IconKeyboard } from "./Icons.jsx";
-import PillDropdown from "./PillDropdown.jsx";
+import BackendPicker from "./BackendPicker.jsx";
+import { BACKEND_KEY, resolveBackend } from "./backends.js";
+import { useInstalledBackends } from "./useInstalledBackends.js";
 
-const BACKEND_KEY = "peek-backend";
-const BACKEND_OPTIONS = [
-  { value: "claude", label: "Claude Code" },
-  { value: "codex", label: "Codex" },
-];
 const fmtAccelDisplay = (acc) => fmtAccel(acc) || "unavailable";
 
 const NAV = [
@@ -23,7 +20,8 @@ export default function Settings({ onClose }) {
   const [recording, setRecording] = useState(false);
   const [held, setHeld] = useState({ ctrl: false, alt: false, shift: false, meta: false });
   const [status, setStatus] = useState(null); // {kind:'ok'|'error', text}
-  const [backend, setBackend] = useState(() => localStorage.getItem(BACKEND_KEY) || "claude");
+  const [backend, setBackend] = useState(() => localStorage.getItem(BACKEND_KEY) || "");
+  const { available: installedBackends, loading: backendsLoading } = useInstalledBackends();
   const [openAtLogin, setOpenAtLogin] = useState(false);
   const [loginItemLabel, setLoginItemLabel] = useState("Open at Login");
 
@@ -31,6 +29,12 @@ export default function Settings({ onClose }) {
   useEffect(() => { window.peekDesktop.getHotkey().then(setHotkey); }, []);
   useEffect(() => { window.peekDesktop.loginItem.get().then(setOpenAtLogin); }, []);
   useEffect(() => { localStorage.setItem(BACKEND_KEY, backend); }, [backend]);
+  useEffect(() => {
+    if (backendsLoading) return;
+    const next = resolveBackend(backend, installedBackends);
+    if (next && next !== backend) setBackend(next);
+    else if (!next && backend) setBackend("");
+  }, [backendsLoading, installedBackends]);
 
   useEffect(() => {
     if (!recording) return;
@@ -132,8 +136,8 @@ export default function Settings({ onClose }) {
         <div className="peek-scroll" style={{ flex: 1, overflowY: "auto", padding: "24px 24px 4px" }}>
           {section === "general" && (
             <>
-              <SettingRow title="Default backend" desc="Which CLI answers new chats by default.">
-                <PillDropdown value={backend} onChange={setBackend} options={BACKEND_OPTIONS} placement="down" align="right" minWidth={150} />
+              <SettingRow title="Default backend" desc="Which installed CLI answers new chats by default.">
+                <BackendPicker value={backend} onChange={setBackend} placement="down" align="right" minWidth={150} />
               </SettingRow>
 
               <SettingRow title={loginItemLabel} desc="Launch Peek automatically at login." last>

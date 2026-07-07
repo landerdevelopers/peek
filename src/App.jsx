@@ -8,7 +8,7 @@ import { OCR_PROMPT } from "./prompts.js";
 import { anchorRefineUi, REFINE_UI_SIZES } from "./refinePosition.js";
 import { IconClose, IconPeek, IconSparkle } from "./Icons.jsx";
 
-const BACKEND_KEY = "peek-backend";
+import { BACKEND_KEY, resolveBackend, INSTALL_CLI_MESSAGE } from "./backends.js";
 
 const MIN_DRAG = 6; // px — below this a click is treated as a miss-click, not a selection
 const BUBBLE_SIZE = 52;
@@ -455,8 +455,16 @@ export default function App() {
 
   const extractTextFromCrop = async () => {
     if (ocrPanel?.busy || !panelData?.imagePath) return;
+    const { available = [] } = await window.peekDesktop.listBackends?.() || {};
+    const backend = resolveBackend(localStorage.getItem(BACKEND_KEY), available);
+    if (!backend) {
+      window.peekDesktop.notify?.({
+        title: "Peek — no CLI installed",
+        body: INSTALL_CLI_MESSAGE,
+      });
+      return;
+    }
     setOcrPanel({ busy: true });
-    const backend = localStorage.getItem(BACKEND_KEY) || "claude";
     const res = await window.peekDesktop.ask({
       imagePath: panelData.imagePath,
       thumbDataUrl: panelData.thumbDataUrl,

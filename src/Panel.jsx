@@ -3,14 +3,12 @@ import { LIGHT } from "./theme.js";
 import ChatTurn, { ThinkingBubble } from "./ChatTurn.jsx";
 import PillDropdown from "./PillDropdown.jsx";
 import { useVoiceInput } from "./useVoiceInput.js";
+import BackendPicker from "./BackendPicker.jsx";
+import { BACKEND_KEY, resolveBackend } from "./backends.js";
+import { useInstalledBackends } from "./useInstalledBackends.js";
 import { IconClose, IconArrowUp, IconAttachment, IconMic, IconScanText, IconPin, IconMinimize, IconDownload } from "./Icons.jsx";
 import { OCR_PROMPT } from "./prompts.js";
 
-const BACKEND_KEY = "peek-backend";
-const BACKEND_OPTIONS = [
-  { value: "claude", label: "Claude Code" },
-  { value: "codex", label: "Codex" },
-];
 const DRAG_EDGE_MARGIN = 80;
 const COMPACT_W = 380;
 const EXPANDED_W = 520;
@@ -123,7 +121,8 @@ export default function Panel({
   const [thread, setThread] = useState([]); // [{q, a}]
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [backend, setBackend] = useState(() => localStorage.getItem(BACKEND_KEY) || "claude");
+  const [backend, setBackend] = useState(() => localStorage.getItem(BACKEND_KEY) || "");
+  const { available: installedBackends, loading: backendsLoading, hasAny: hasBackend } = useInstalledBackends();
   // Every answered question is saved (see main.cjs's peek:ask handler); this
   // dropdown lets a fresh capture continue an earlier conversation instead of
   // always starting a new one. Defaults to "New chat" (sessionId === null).
@@ -185,6 +184,12 @@ export default function Panel({
   }, [selectionRect, mode]);
   useEffect(() => { localStorage.setItem(BACKEND_KEY, backend); }, [backend]);
   useEffect(() => {
+    if (backendsLoading) return;
+    const next = resolveBackend(backend, installedBackends);
+    if (next && next !== backend) setBackend(next);
+    else if (!next && backend) setBackend("");
+  }, [backendsLoading, installedBackends]);
+  useEffect(() => {
     window.peekDesktop.sessions?.list().then((list) => setSessions(list || [])).catch(() => {});
   }, []);
   useEffect(() => {
@@ -213,7 +218,7 @@ export default function Panel({
     const s = await window.peekDesktop.sessions.get(id);
     if (!s) return;
     setSessionId(s.id);
-    setBackend(s.backend || "claude");
+    setBackend(s.backend || resolveBackend("", installedBackends) || "");
     setThread((s.thread || []).map((t) => ({ q: t.q, a: t.a })));
   };
 
@@ -230,7 +235,7 @@ export default function Panel({
   // context into an unrelated conversation the way an in-panel tab switch once could.
   const send = async (overrideQuestion) => {
     const question = (overrideQuestion ?? input).trim();
-    if (!question || busy) return;
+    if (!question || busy || !backend) return;
     setInput("");
     setBusy(true);
     const gen = ++askGenRef.current;
@@ -472,13 +477,13 @@ export default function Panel({
   );
 
   const sendBtn = (dark) => (
-    <button onClick={() => send()} disabled={busy || !input.trim()} style={{
+    <button onClick={() => send()} disabled={busy || !input.trim() || !backend} style={{
       width: 32, height: 32, borderRadius: "50%",
       background: dark ? "#fff" : "#000", border: "none",
       boxShadow: dark ? "none" : "0 4px 12px rgba(0,0,0,0.2)",
       display: "flex", alignItems: "center", justifyContent: "center",
       cursor: busy ? "default" : "pointer",
-      opacity: busy || !input.trim() ? 0.35 : 1, flexShrink: 0,
+      opacity: busy || !input.trim() || !backend ? 0.35 : 1, flexShrink: 0,
     }}>
       <IconArrowUp style={{ color: dark ? "#111" : "#fff", width: 15, height: 15 }} />
     </button>
@@ -525,7 +530,7 @@ export default function Panel({
             ><IconScanText /></PillIconBtn>
           </>
         )}
-        <PillDropdown value={backend} onChange={setBackend} options={BACKEND_OPTIONS} />
+        <BackendPicker value={backend} onChange={setBackend} />
         {sessions.length > 0 && (
           <PillDropdown
             value={sessionId || ""}
