@@ -17,6 +17,7 @@ const NAV = [
 export default function Settings({ onClose }) {
   const [section, setSection] = useState("general");
   const [hotkey, setHotkey] = useState(null);
+  const [modeHotkeys, setModeHotkeys] = useState({ image: null, text: null });
   const [recording, setRecording] = useState(false);
   const [held, setHeld] = useState({ ctrl: false, alt: false, shift: false, meta: false });
   const [status, setStatus] = useState(null); // {kind:'ok'|'error', text}
@@ -26,7 +27,12 @@ export default function Settings({ onClose }) {
   const [loginItemLabel, setLoginItemLabel] = useState("Open at Login");
 
   useEffect(() => { loadPlatformInfo().then((info) => setLoginItemLabel(info.loginItemLabel)); }, []);
-  useEffect(() => { window.peekDesktop.getHotkey().then(setHotkey); }, []);
+  useEffect(() => {
+    window.peekDesktop.getHotkey().then(setHotkey);
+    window.peekDesktop.getHotkeys?.().then((keys) => {
+      if (keys) setModeHotkeys({ image: keys.image, text: keys.text });
+    });
+  }, []);
   useEffect(() => { window.peekDesktop.loginItem.get().then(setOpenAtLogin); }, []);
   useEffect(() => { localStorage.setItem(BACKEND_KEY, backend); }, [backend]);
   useEffect(() => {
@@ -152,27 +158,43 @@ export default function Settings({ onClose }) {
           )}
 
           {section === "hotkey" && (
-            <SettingRow title="Hotkey" desc="Capture your screen from anywhere." last>
-              {!recording ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{
-                    fontSize: 13, fontWeight: 600, color: LIGHT.text, background: LIGHT.surface,
-                    border: `1px solid ${LIGHT.border}`, borderRadius: 6, padding: "6px 10px",
-                  }}>{fmtAccelDisplay(hotkey)}</span>
-                  <button onClick={() => setRecording(true)} style={btnStyle()}>Change</button>
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    {modifierChips().map(({ key, label }) => chip(label, held[key]))}
+            <>
+              <SettingRow title="Toggle Peek" desc="Show or hide Peek from anywhere.">
+                {!recording ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{
+                      fontSize: 13, fontWeight: 600, color: LIGHT.text, background: LIGHT.surface,
+                      border: `1px solid ${LIGHT.border}`, borderRadius: 6, padding: "6px 10px",
+                    }}>{fmtAccelDisplay(hotkey)}</span>
+                    <button onClick={() => setRecording(true)} style={btnStyle()}>Change</button>
                   </div>
-                  <span style={{ color: LIGHT.muted, fontSize: 11.5 }}>+ a key · Esc to cancel</span>
-                  {status && (
-                    <div style={{ fontSize: 12.5, color: status.kind === "ok" ? "#3E8A5C" : "#C4522F" }}>{status.text}</div>
-                  )}
-                </div>
-              )}
-            </SettingRow>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      {modifierChips().map(({ key, label }) => chip(label, held[key]))}
+                    </div>
+                    <span style={{ color: LIGHT.muted, fontSize: 11.5 }}>+ a key · Esc to cancel</span>
+                    {status && (
+                      <div style={{ fontSize: 12.5, color: status.kind === "ok" ? "#3E8A5C" : "#C4522F" }}>{status.text}</div>
+                    )}
+                  </div>
+                )}
+              </SettingRow>
+
+              <SettingRow title="Image mode" desc="Jump straight into screenshot capture.">
+                <span style={{
+                  fontSize: 13, fontWeight: 600, color: LIGHT.text, background: LIGHT.surface,
+                  border: `1px solid ${LIGHT.border}`, borderRadius: 6, padding: "6px 10px",
+                }}>{fmtAccelDisplay(modeHotkeys.image)}</span>
+              </SettingRow>
+
+              <SettingRow title="Text mode" desc="Jump straight into the text composer." last>
+                <span style={{
+                  fontSize: 13, fontWeight: 600, color: LIGHT.text, background: LIGHT.surface,
+                  border: `1px solid ${LIGHT.border}`, borderRadius: 6, padding: "6px 10px",
+                }}>{fmtAccelDisplay(modeHotkeys.text)}</span>
+              </SettingRow>
+            </>
           )}
         </div>
       </div>

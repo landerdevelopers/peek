@@ -25,7 +25,8 @@ contextBridge.exposeInMainWorld("peekDesktop", {
   },
   ocrLayout: (imagePath) => ipcRenderer.invoke("peek:ocr-layout", imagePath),
   replaceSelection: (text) => ipcRenderer.invoke("peek:replace-selection", text),
-  notifyPanelExpanded: (armed) => ipcRenderer.send("peek:panel-expanded", armed),
+  notifyPanelExpanded: (armed) => ipcRenderer.send("peek:set-armed", armed),
+  setArmed: (armed) => ipcRenderer.send("peek:set-armed", armed),
   endSession: () => ipcRenderer.send("peek:end-session"),
   deactivate: () => ipcRenderer.send("peek:deactivate-request"),
   openDashboard: () => ipcRenderer.send("peek:open-dashboard"),
@@ -33,6 +34,7 @@ contextBridge.exposeInMainWorld("peekDesktop", {
   quit: () => ipcRenderer.send("peek:quit"),
   submitHotkey: (accel) => ipcRenderer.invoke("peek:submit-hotkey", accel),
   getHotkey: () => ipcRenderer.invoke("peek:hotkey:get"),
+  getHotkeys: () => ipcRenderer.invoke("peek:hotkeys:get"),
   getPlatformInfo: () => ipcRenderer.invoke("peek:platform-info"),
   listBackends: (opts) => ipcRenderer.invoke("peek:backends:list", opts),
   whoami: () => ipcRenderer.invoke("peek:whoami"),
@@ -88,5 +90,25 @@ contextBridge.exposeInMainWorld("peekDesktop", {
     const fn = () => cb();
     ipcRenderer.on("peek:restore-panel", fn);
     return () => ipcRenderer.removeListener("peek:restore-panel", fn);
+  },
+  onOpenImage: (cb) => {
+    const fn = () => cb();
+    ipcRenderer.on("peek:open-image", fn);
+    return () => ipcRenderer.removeListener("peek:open-image", fn);
+  },
+  onOpenText: (cb) => {
+    const fn = () => cb();
+    ipcRenderer.on("peek:open-text", fn);
+    return () => ipcRenderer.removeListener("peek:open-text", fn);
+  },
+  onStandDown: (cb) => {
+    const fn = () => cb();
+    ipcRenderer.on("peek:stand-down", fn);
+    return () => ipcRenderer.removeListener("peek:stand-down", fn);
+  },
+  onArm: (cb) => {
+    const fn = () => cb();
+    ipcRenderer.on("peek:arm", fn);
+    return () => ipcRenderer.removeListener("peek:arm", fn);
   },
 });

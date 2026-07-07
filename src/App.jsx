@@ -113,24 +113,21 @@ function FrozenCropOverlay({ crop, zIndex = 34, dim = 0.78 }) {
  * Peek's overlay state machine. `mode` is one of:
  *   idle    — fully off. Nothing rendered, bubble hidden. Only the hotkey
  *             (or tray "Ask about screen") gets out of this state.
- *   bubble  — Peek active, just the docked bubble tab on screen. Hovering it
- *             slides out the mode strip (BubbleStrip: Image/Text/Voice);
- *             clicking it restores a minimized chat (or does nothing if idle).
- *             Text
- *             selection (SelectionPopup) works here too — see main.cjs's
- *             activatePeek, which starts the global selection hook the instant
- *             Peek becomes active, independent of `mode`.
+ *   bubble  — Peek's tab is on screen. When armed, hovering slides out the
+ *             mode strip and selection/refine/capture work. When dormant
+ *             (grayscale), the tab stays visible but features are off — click
+ *             it to arm again. Clicking while armed dismisses to dormant.
  *   picking — chose "Image": a modal dim/crosshair capture screen. Drag a
  *             region or press Enter for full screen; Esc cancels back to bubble.
  *   panel   — Panel is open (image/text/voice sub-mode is `overlayMode`).
  *   record  — the tray's "Change hotkey…" flow (RecordHotkey).
  *
- * The hotkey is a hard on/off for `idle` vs everything else (see
- * main.cjs's activatePeek/deactivatePeek) — it no longer just toggles an
- * already-open panel's minimized state the way it used to.
+ * The hotkey toggles armed vs dormant when the bubble is visible, or shows it
+ * armed on first press (see main.cjs activatePeek / standDownPeek).
  */
 export default function App() {
   const [mode, setMode] = useState("idle");
+  const [armed, setArmed] = useState(false);
   const [menuView, setMenuView] = useState("root"); // "root" | "text-options"
   const [overlayMode, setOverlayMode] = useState("image"); // image | text | voice
   const [pickerImg, setPickerImg] = useState(null);
@@ -216,6 +213,7 @@ export default function App() {
   };
 
   const openHover = (opts = {}) => {
+    if (!armed) return;
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
     // Fresh hover from the bubble itself resets to Image/Text/Voice; moving
     // from the bubble into the already-open strip keeps the current sub-view.
@@ -228,6 +226,8 @@ export default function App() {
   };
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
+  const armedRef = useRef(armed);
+  useEffect(() => { armedRef.current = armed; }, [armed]);
 
   useEffect(() => {
     try { localStorage.setItem(BUBBLE_POS_KEY, JSON.stringify(bubblePos)); } catch {}
@@ -313,6 +313,26 @@ export default function App() {
     });
   };
 
+  const standDown = () => {
+    setBubbleHovered(false);
+    window.peekDesktop.endSession?.();
+    resetSession();
+    if (modeRef.current === "picking") setPickerImg(null);
+    setMode("bubble");
+    setArmed(false);
+  };
+
+  const armPeek = () => {
+    setArmed(true);
+    clickThroughRef.current = true;
+    window.peekDesktop.setClickThrough(true);
+  };
+
+  const standDownRef = useRef(standDown);
+  standDownRef.current = standDown;
+  const armPeekRef = useRef(armPeek);
+  armPeekRef.current = armPeek;
+
   const restoreMinimizedPanel = () => {
     if (mode === "panel" && minimized) {
       setMinimized(false);
@@ -325,19 +345,24 @@ export default function App() {
     if (!window.peekDesktop) return;
     const offActivate = window.peekDesktop.onActivate?.(() => {
       resetSession();
+      setArmed(true);
       setMode("bubble");
       clickThroughRef.current = true;
       window.peekDesktop.setClickThrough(true);
     });
     const offDeactivate = window.peekDesktop.onDeactivate?.(() => {
       resetSession();
+      setArmed(false);
       setMode("idle");
     });
+    const offStandDown = window.peekDesktop.onStandDown?.(() => standDownRef.current?.());
+    const offArm = window.peekDesktop.onArm?.(() => armPeekRef.current?.());
     // main.cjs's noteSelectionPending already grabs the clipboard eagerly
     // (has to — see its own comment on why waiting for a Refine click would
     // hit Windows' anti-focus-stealing protection) — grabSelection() below
     // just retrieves what was already grabbed, no fresh clipboard access.
     const offSelectionPending = window.peekDesktop.onSelectionPending?.((data) => {
+      if (!armedRef.current) return;
       if (data?.x == null) return;
       setPendingSelectionPos({ x: data.x, y: data.y });
     });
@@ -346,24 +371,26 @@ export default function App() {
     // meaningful before a Refine click (an already-open quick-actions
     // popup/answer is left alone; see App.jsx's onMouseDown for that dismissal).
     const offSelectionCleared = window.peekDesktop.onSelectionCleared?.(() => {
+      if (!armedRef.current) return;
       setPendingSelectionPos(null);
     });
     const offRecord = window.peekDesktop.onRecord(() => setMode("record"));
     const offOverlayBlur = window.peekDesktop.onOverlayBlur?.(() => setHasOsFocus(false));
     const offOverlayFocus = window.peekDesktop.onOverlayFocus?.(() => setHasOsFocus(true));
     const offRestorePanel = window.peekDesktop.onRestorePanel?.(() => restoreMinimizedPanel());
+    const offOpenImage = window.peekDesktop.onOpenImage?.(() => chooseImageRef.current?.());
+    const offOpenText = window.peekDesktop.onOpenText?.(() => chooseTextRef.current?.());
     return () => {
-      offActivate?.(); offDeactivate?.(); offSelectionPending?.(); offSelectionCleared?.(); offRecord();
+      offActivate?.(); offDeactivate?.(); offStandDown?.(); offArm?.();
+      offSelectionPending?.(); offSelectionCleared?.(); offRecord();
       offOverlayBlur?.(); offOverlayFocus?.(); offRestorePanel?.();
+      offOpenImage?.(); offOpenText?.();
     };
   }, []);
 
-  // Keeps main.cjs's notion of "is Peek active at all" in sync, so the
-  // global hotkey and tray menu item know whether to arm a fresh session or
-  // fully deactivate (see onHotkeyPressed in main.cjs).
   useEffect(() => {
-    window.peekDesktop.notifyPanelExpanded?.(mode !== "idle");
-  }, [mode]);
+    window.peekDesktop.setArmed?.(armed);
+  }, [armed]);
 
   // "Refine" pill click — the one moment Peek actually simulates Ctrl+C into
   // the source window. Clears the pill either way (success or failure) so a
@@ -453,6 +480,26 @@ export default function App() {
     setMode("picking");
   };
 
+  const chooseImageRef = useRef(chooseImage);
+  chooseImageRef.current = chooseImage;
+
+  const chooseText = () => {
+    setBubbleHovered(false);
+    replaceActiveSession();
+    setOverlayMode("text");
+    setPanelData(null);
+    setPickerImg(null);
+    setSelectionRect(null);
+    setMinimized(false);
+    setPinned(false);
+    setHasOsFocus(true);
+    setInitialQuestion(null);
+    setMode("panel");
+  };
+
+  const chooseTextRef = useRef(chooseText);
+  chooseTextRef.current = chooseText;
+
   const extractTextFromCrop = async () => {
     if (ocrPanel?.busy || !panelData?.imagePath) return;
     const { available = [] } = await window.peekDesktop.listBackends?.() || {};
@@ -525,15 +572,7 @@ export default function App() {
     setBubbleHovered(false);
     replaceActiveSession();
     if (key === "custom") {
-      setOverlayMode("text");
-      setPanelData(null);
-      setPickerImg(null);
-      setSelectionRect(null);
-      setMinimized(false);
-      setPinned(false);
-      setHasOsFocus(true);
-      setInitialQuestion(null);
-      setMode("panel");
+      chooseText();
       return;
     }
     const shot = await window.peekDesktop.captureNow();
@@ -724,10 +763,12 @@ export default function App() {
       const { moved } = bubbleDragRef.current;
       bubbleDragRef.current = null;
       if (!moved) {
-        if (mode === "panel" && minimized) {
+        if (!armedRef.current) {
+          armPeekRef.current?.();
+        } else if (modeRef.current === "panel" && minimized) {
           restoreMinimizedPanel();
         } else {
-          setBubbleHovered(false);
+          standDownRef.current?.();
         }
       } else {
         // A real drag ended — the bubble followed the cursor freely for
@@ -778,7 +819,7 @@ export default function App() {
   // so it reads as a strip being pulled from the side rather than a detached
   // button. Anchored flush: left-dock grows rightward (left stays 0), right-
   // dock grows leftward (left shifts back by the same amount it widens).
-  const bubblePull = bubbleHovered && bubbleDocked ? BUBBLE_PULL : 0;
+  const bubblePull = armed && bubbleHovered && bubbleDocked ? BUBBLE_PULL : 0;
   const bubbleWidth = BUBBLE_SIZE + bubblePull;
   const bubbleLeft = bubbleDockedRight ? bubblePos.x - bubblePull : bubblePos.x;
   const bubbleRadius = bubbleDockedRight
@@ -787,8 +828,8 @@ export default function App() {
     ? "0 16px 16px 0"
     : "50%"; // free circle only while mid-drag, before it snaps back to an edge
   // The mode strip (Image/Text/Voice) slides out on bubble hover only.
-  const showStrip = bubbleShown && bubbleHovered;
-  const activeChat = mode === "panel" && minimized
+  const showStrip = bubbleShown && armed && bubbleHovered;
+  const activeChat = armed && mode === "panel" && minimized
     ? { kind: "panel", busy: panelBusy, ready: answerReady }
     : null;
   const activeCrop = cropHistory[activeCropIndex] || cropHistory[cropHistory.length - 1] || null;
@@ -861,7 +902,7 @@ export default function App() {
         </>
       )}
 
-      {!selectedText && pendingPillPos && (
+      {!selectedText && armed && pendingPillPos && (
         // Appears on selection gesture; disappears if nothing was copied.
         <div data-peek-ui="true" style={{
           position: "fixed", left: pendingPillPos.left, top: pendingPillPos.top, zIndex: 50,
@@ -880,7 +921,7 @@ export default function App() {
           </button>
         </div>
       )}
-      {grabError && (() => {
+      {armed && grabError && (() => {
         const errPos = grabError.pos
           ? anchorRefineUi(grabError.pos, { width: 220, height: 36 })
           : { left: 8, top: 8 };
@@ -903,7 +944,7 @@ export default function App() {
           onClose={() => setOcrPanel(null)}
         />
       )}
-      {refineSessionActive && (
+      {refineSessionActive && armed && (
         <SelectionPopup
           key={refineKey}
           selectedText={selectedText}
@@ -939,7 +980,7 @@ export default function App() {
         />
       )}
 
-      {mode === "panel" && !isDragging && (overlayMode === "image" ? !!panelData : true) && (
+      {armed && mode === "panel" && !isDragging && (overlayMode === "image" ? !!panelData : true) && (
         <div
           style={{ zIndex: 48, cursor: "default", pointerEvents: minimized ? "none" : "auto" }}
           onMouseDown={(e) => { if (!minimized) e.stopPropagation(); }}
@@ -980,10 +1021,11 @@ export default function App() {
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
           onMouseEnter={() => openHover()}
           onMouseLeave={closeHoverSoon}
+          title={armed ? "Drag or click to pause Peek" : "Click to activate Peek"}
           style={{
             position: "fixed", left: bubbleLeft, top: bubblePos.y, width: bubbleWidth, height: BUBBLE_SIZE,
-            borderRadius: bubbleRadius, background: "#fff",
-            border: "1px solid rgba(0,0,0,0.08)",
+            borderRadius: bubbleRadius, background: armed ? "#fff" : "#ECECEC",
+            border: `1px solid ${armed ? "rgba(0,0,0,0.08)" : "rgba(0,0,0,0.06)"}`,
             display: "flex", alignItems: "center",
             // Sparkle hugs the inner (screen-facing) side so the tab visibly
             // stretches out of the docked edge as it widens on hover, leaving
@@ -992,19 +1034,23 @@ export default function App() {
             paddingLeft: bubbleDockedRight ? (BUBBLE_SIZE - 30) / 2 : 0,
             paddingRight: bubbleDockedLeft ? (BUBBLE_SIZE - 30) / 2 : 0,
             boxSizing: "border-box",
-            boxShadow: bubbleHovered
+            boxShadow: armed && bubbleHovered
               ? "0 10px 28px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.06)"
-              : "0 6px 20px rgba(0,0,0,0.12)",
-            cursor: "grab", zIndex: 60,
-            transition: "width 0.24s cubic-bezier(0.34, 1.25, 0.64, 1), left 0.24s cubic-bezier(0.34, 1.25, 0.64, 1), box-shadow 0.24s ease, border-color 0.2s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1)",
+              : armed
+              ? "0 6px 20px rgba(0,0,0,0.12)"
+              : "0 4px 14px rgba(0,0,0,0.08)",
+            cursor: armed ? "grab" : "pointer", zIndex: 60,
+            filter: armed ? "none" : "grayscale(1)",
+            opacity: armed ? 1 : 0.72,
+            transition: "width 0.24s cubic-bezier(0.34, 1.25, 0.64, 1), left 0.24s cubic-bezier(0.34, 1.25, 0.64, 1), box-shadow 0.24s ease, border-color 0.2s ease, filter 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.22s cubic-bezier(0.22, 1, 0.36, 1), background 0.22s ease",
           }}
         >
-          <IconPeek width={panelBusy ? 30 : 24} loading={panelBusy} style={{ color: "#000", flexShrink: 0 }} />
-          {bubbleHovered && (
+          <IconPeek width={panelBusy && armed ? 30 : 24} loading={panelBusy && armed} style={{ color: armed ? "#000" : "#6B6B6B", flexShrink: 0 }} />
+          {armed && bubbleHovered && (
           <button
             className="peek-fade-in"
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); window.peekDesktop.deactivate?.(); }}
+            onClick={(e) => { e.stopPropagation(); standDownRef.current?.(); }}
             style={{
               // Anchored on the inner (screen-facing) top corner so it never
               // lands off-screen past the edge the bubble is docked flush to.

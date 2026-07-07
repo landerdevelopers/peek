@@ -38,6 +38,20 @@ function defaultHotkeyCandidates() {
   return ["Control+Alt+A", "Control+Alt+Q", "Control+Shift+A", "Control+Alt+Space"];
 }
 
+function defaultImageHotkeyCandidates() {
+  if (isMac) {
+    return ["Super+Alt+I", "Super+Shift+I", "Control+Alt+I"];
+  }
+  return ["Control+Alt+I", "Control+Shift+I"];
+}
+
+function defaultTextHotkeyCandidates() {
+  if (isMac) {
+    return ["Super+Alt+T", "Super+Shift+T", "Control+Alt+T"];
+  }
+  return ["Control+Alt+T", "Control+Shift+T"];
+}
+
 function formatAccelerator(acc) {
   if (!acc) return "unavailable — set one below";
   if (isMac) {
@@ -74,6 +88,8 @@ module.exports = {
   simulatePaste,
   isSelectAllKeyEvent,
   defaultHotkeyCandidates,
+  defaultImageHotkeyCandidates,
+  defaultTextHotkeyCandidates,
   formatAccelerator,
   loginItemLabel,
   replaceFocusErrorMessage,

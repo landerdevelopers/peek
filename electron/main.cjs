@@ -64,6 +64,8 @@ let overlayWin = null;
 let dashboardWin = null;
 let tray = null;
 let hotkeyAccel = null;
+let imageHotkeyAccel = null;
+let textHotkeyAccel = null;
 let isQuitting = false;
 let lastCapture = null; // { image: NativeImage, width, height } — the full, uncropped shot
 let capturedPath = null; // temp PNG for the CURRENT panel session
@@ -91,7 +93,6 @@ function suspendOverlayForSystemUI({ focusDashboard: focusDash = true } = {}) {
   if (overlaySuspendDepth === 1) {
     overlaySuspendSnapshot = {
       wasVisible: overlayWin.isVisible(),
-      modeArmed,
     };
     overlayWin.setAlwaysOnTop(false);
     overlayWin.hide();
@@ -105,7 +106,7 @@ function suspendOverlayForSystemUI({ focusDashboard: focusDash = true } = {}) {
     if (overlaySuspendDepth !== 0 || !overlaySuspendSnapshot) return;
     const snap = overlaySuspendSnapshot;
     overlaySuspendSnapshot = null;
-    if (!snap.wasVisible || !snap.modeArmed) return;
+    if (!snap.wasVisible) return;
     overlayWin.show();
     overlayWin.setAlwaysOnTop(true, "screen-saver");
     overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -493,6 +494,7 @@ function activatePeek() {
   if (!ensureMacAccessibilityForOverlay()) return;
   cleanupCapture();
   lastCapture = null;
+  peekArmed = true;
   overlayWin.show();
   overlayWin.setAlwaysOnTop(true, "screen-saver");
   overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -503,22 +505,55 @@ function activatePeek() {
 }
 
 function deactivatePeek() {
+  peekArmed = false;
   closeAll();
   overlayWin?.webContents.send("peek:deactivate");
   if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide();
 }
 
-// Whether Peek is active at all right now (bubble visible, in any of its
-// sub-states) — kept in sync by the renderer over peek:panel-expanded every
-// time it changes. This is what makes the hotkey (and the tray's "Ask about
-// screen" item) a hard on/off switch for the bubble itself, matching "bubble
-// on screen" = "Peek active" directly, rather than toggling an open panel's
-// minimized state the way it used to.
-let modeArmed = false;
+// Whether Peek's assistant features are live (selection hook, capture, refine).
+// The bubble can stay on screen in a dormant grayscale state while peekArmed
+// is false — renderer syncs via peek:set-armed.
+let peekArmed = false;
+
+function standDownPeek() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  peekArmed = false;
+  closeAll();
+  overlayWin.webContents.send("peek:stand-down");
+}
+
+function armPeekOverlay() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  if (!overlayWin.isVisible()) {
+    activatePeek();
+    return;
+  }
+  peekArmed = true;
+  overlayWin.setIgnoreMouseEvents(true, { forward: true });
+  startSelectionHook();
+  overlayWin.webContents.send("peek:arm");
+}
 
 function onHotkeyPressed() {
-  if (modeArmed) deactivatePeek();
-  else activatePeek();
+  if (!overlayWin?.isVisible()) {
+    activatePeek();
+    return;
+  }
+  if (peekArmed) standDownPeek();
+  else armPeekOverlay();
+}
+
+function onImageHotkeyPressed() {
+  if (!overlayWin?.isVisible()) activatePeek();
+  else if (!peekArmed) armPeekOverlay();
+  overlayWin?.webContents.send("peek:open-image");
+}
+
+function onTextHotkeyPressed() {
+  if (!overlayWin?.isVisible()) activatePeek();
+  else if (!peekArmed) armPeekOverlay();
+  overlayWin?.webContents.send("peek:open-text");
 }
 
 // Same full-capture, no-hit-testing window state as the picker — just a
@@ -727,6 +762,11 @@ ipcMain.handle("peek:ask", async (_e, payload = {}) => {
 
 ipcMain.handle("peek:submit-hotkey", (_e, accel) => rebindHotkey(String(accel || "")));
 ipcMain.handle("peek:hotkey:get", () => hotkeyAccel);
+ipcMain.handle("peek:hotkeys:get", () => ({
+  main: hotkeyAccel,
+  image: imageHotkeyAccel,
+  text: textHotkeyAccel,
+}));
 // Prefer the real name from the Claude Code CLI's own login (~/.claude.json,
 // written by `claude login`) over the bare OS account name — a shared/local
 // Windows profile name like "11ara" isn't who's actually asking. Codex CLI's
@@ -871,23 +911,33 @@ ipcMain.on("peek:window:close", (e) => BrowserWindow.fromWebContents(e.sender)?.
 // (back to just the bubble) rather than fully hiding. Only the hotkey
 // (deactivatePeek) stops the hook and hides the bubble.
 ipcMain.on("peek:end-session", () => { cleanupCapture(); cleanupPanelSessionCrops(); lastCapture = null; });
-// The bubble's own small close (×) badge — same full deactivation as
-// pressing the hotkey while active, just reachable without it.
+// Tray / explicit hide — fully removes the overlay. The bubble's × uses
+// peek:stand-down instead (grayscale dormant tab, features off).
 ipcMain.on("peek:deactivate-request", () => deactivatePeek());
+ipcMain.on("peek:set-armed", (_e, armed) => {
+  const next = !!armed;
+  if (next === peekArmed) return;
+  peekArmed = next;
+  if (peekArmed && overlayWin?.isVisible()) startSelectionHook();
+  else closeAll();
+});
 ipcMain.on("peek:open-dashboard", () => showDashboard());
 ipcMain.on("peek:set-clickthrough", (_e, on) => { overlayWin?.setIgnoreMouseEvents(!!on, { forward: true }); });
 ipcMain.on("peek:quit", () => app.quit());
-ipcMain.on("peek:panel-expanded", (_e, armed) => { modeArmed = !!armed; });
 ipcMain.on("peek:notify", (_e, { title, body } = {}) => {
   if (!Notification.isSupported()) return;
   const n = new Notification({ title: title || "Peek", body: body || "" });
   n.on("click", () => {
     if (!overlayWin || overlayWin.isDestroyed()) return;
-    overlayWin.show();
-    overlayWin.setAlwaysOnTop(true, "screen-saver");
-    overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    overlayWin.moveTop();
-    overlayWin.setIgnoreMouseEvents(false);
+    if (!overlayWin.isVisible()) activatePeek();
+    else if (!peekArmed) armPeekOverlay();
+    else {
+      overlayWin.show();
+      overlayWin.setAlwaysOnTop(true, "screen-saver");
+      overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      overlayWin.moveTop();
+      overlayWin.setIgnoreMouseEvents(false);
+    }
     overlayWin.webContents.send("peek:restore-panel");
   });
   n.show();
@@ -909,6 +959,18 @@ function registerShortcut() {
   hotkeyAccel = bindShortcut(candidates, onHotkeyPressed);
   // Sticky: remember whichever combo actually worked, so next launch tries it first.
   if (hotkeyAccel) saveConfig({ hotkey: hotkeyAccel });
+
+  const imageCandidates = cfg.imageHotkey
+    ? [cfg.imageHotkey, ...platform.defaultImageHotkeyCandidates()]
+    : platform.defaultImageHotkeyCandidates();
+  const textCandidates = cfg.textHotkey
+    ? [cfg.textHotkey, ...platform.defaultTextHotkeyCandidates()]
+    : platform.defaultTextHotkeyCandidates();
+  imageHotkeyAccel = bindShortcut(imageCandidates, onImageHotkeyPressed);
+  textHotkeyAccel = bindShortcut(textCandidates, onTextHotkeyPressed);
+  if (imageHotkeyAccel) saveConfig({ imageHotkey: imageHotkeyAccel });
+  if (textHotkeyAccel) saveConfig({ textHotkey: textHotkeyAccel });
+
   if (!hotkeyAccel && Notification.isSupported()) {
     new Notification({
       title: "Peek — no hotkey available",
@@ -956,6 +1018,8 @@ function buildTrayMenu() {
     { label: "Open Peek", click: () => showDashboard() },
     { type: "separator" },
     { label: `Ask about screen  (${fmtAccel(hotkeyAccel)})`, click: () => onHotkeyPressed() },
+    { label: `Image mode  (${fmtAccel(imageHotkeyAccel)})`, click: () => onImageHotkeyPressed() },
+    { label: `Text mode  (${fmtAccel(textHotkeyAccel)})`, click: () => onTextHotkeyPressed() },
     { label: "Change hotkey…", click: () => startRecording() },
     { label: "Close panel", click: () => deactivatePeek() },
     { type: "separator" },
