@@ -119,8 +119,13 @@ export function useVoiceInput(input, setInput) {
       voiceBaseRef.current = merged;
       setInput(merged);
       sampleChunksRef.current = [];
-    } catch {
-      setVoiceError("Voice transcription failed. Try again in a moment.");
+    } catch (err) {
+      const msg = err?.message || "";
+      setVoiceError(
+        msg.includes("npm install")
+          ? msg
+          : "Voice transcription failed. Try again in a moment.",
+      );
     } finally {
       transcribingRef.current = false;
     }

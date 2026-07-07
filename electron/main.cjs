@@ -779,7 +779,9 @@ ipcMain.handle("peek:transcribe-audio", async (_e, meta, buffer) => {
     const len = meta?.length || 0;
     if (!len || !buffer) return "";
     const samples = new Float32Array(buffer, 0, len);
-    return await voiceTranscribe.transcribeAudio(samples, meta.sampleRate || 16000);
+    const res = await voiceTranscribe.transcribeAudio(samples, meta.sampleRate || 16000);
+    if (typeof res === "string") return res;
+    return "";
   } catch (err) {
     console.warn("[peek] transcribe-audio:", err.message);
     return { error: err.message || "Transcription failed" };

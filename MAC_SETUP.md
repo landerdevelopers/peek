@@ -55,6 +55,8 @@ npm install
 npm run desktop
 ```
 
+**After `git pull`**, always run `npm install` again before `npm run desktop` — new dependencies (e.g. voice transcription) are not installed by pull alone.
+
 First `npm install` can take several minutes.
 
 You should see:
@@ -140,6 +142,7 @@ First launch of an unsigned build: right-click the app → **Open**.
 | `command not found: brew` | Run Homebrew's PATH commands from install output; open new Terminal |
 | `command not found: git` | `brew install git` |
 | `npm install` fails on native modules | `xcode-select --install`, then `npm install` again |
+| `cannot find module '@xenova/transformers'` | Run `npm install` after `git pull`, then `npm run desktop` |
 | Hotkey does nothing | Menu bar → see bound key; **Change hotkey…** → try **⌘ + ⌥ + Space** |
 | Refine never appears | Accessibility permission → quit Peek → `npm run desktop` |
 | Screenshot black / capture fails | Screen Recording permission → quit → relaunch |
@@ -165,6 +168,9 @@ git clone https://github.com/landerdevelopers/peek.git
 cd peek
 npm install
 npm run desktop
+
+# Updates
+cd ~/Projects/peek && git pull && npm install && npm run desktop
 ```
 
 Then: **Accessibility** + **Screen Recording** + **Microphone** in System Settings → quit Peek → `npm run desktop` again.

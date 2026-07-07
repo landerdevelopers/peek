@@ -14,7 +14,10 @@
     "files": [
       "dist/**",
       "electron/**",
-      "public/icon-192.png"
+      "public/icon-192.png",
+      "node_modules/@xenova/**",
+      "node_modules/onnxruntime-node/**",
+      "node_modules/onnxruntime-common/**"
     ],
     "asarUnpack": [
       "node_modules/**",

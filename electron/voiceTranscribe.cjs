@@ -1,17 +1,40 @@
 /**
  * Local speech-to-text via Whisper (transformers.js). webkitSpeechRecognition
  * does not work in Electron — Chromium lacks Chrome's proprietary speech backend.
+ *
+ * @xenova/transformers is loaded lazily so Peek still launches if voice deps
+ * are missing (e.g. git pull without `npm install` on Mac).
  */
 const path = require("node:path");
 const { app } = require("electron");
-const { pipeline, env } = require("@xenova/transformers");
-
-env.cacheDir = path.join(app.getPath("userData"), "whisper-models");
-env.allowRemoteModels = true;
 
 const MODEL = "Xenova/whisper-tiny.en";
 
 let pipePromise = null;
+let transformersEnv = null;
+
+function loadTransformers() {
+  try {
+    return require("@xenova/transformers");
+  } catch (err) {
+    const missing = err?.code === "MODULE_NOT_FOUND"
+      || /cannot find module '@xenova\/transformers'/i.test(String(err?.message || ""));
+    const hint = missing
+      ? "Run `npm install` in the peek folder (required after every `git pull`)."
+      : (err?.message || String(err));
+    throw new Error(`Voice transcription is unavailable. ${hint}`);
+  }
+}
+
+function getEnv() {
+  if (!transformersEnv) {
+    const { env } = loadTransformers();
+    env.cacheDir = path.join(app.getPath("userData"), "whisper-models");
+    env.allowRemoteModels = true;
+    transformersEnv = env;
+  }
+  return transformersEnv;
+}
 
 function resample(samples, fromRate, toRate) {
   if (fromRate === toRate) return samples;
@@ -29,6 +52,8 @@ function resample(samples, fromRate, toRate) {
 
 function getPipe() {
   if (!pipePromise) {
+    getEnv();
+    const { pipeline } = loadTransformers();
     pipePromise = pipeline("automatic-speech-recognition", MODEL);
   }
   return pipePromise;
