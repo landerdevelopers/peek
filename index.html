@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Peek</title>
+    <style>
+      /* Self-hosted Inter (SIL Open Font License) — the closest freely
+         licensed stand-in for Apple's SF Pro (which is proprietary and
+         can't legally ship in a non-Apple-platform app). -apple-system /
+         BlinkMacSystemFont are listed first so this genuinely renders as
+         real San Francisco if Peek ever runs on macOS. */
+      @font-face {
+        font-family: "Inter";
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url("./fonts/inter-400.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Inter";
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+        src: url("./fonts/inter-500.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Inter";
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+        src: url("./fonts/inter-600.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Inter";
+        font-style: normal;
+        font-weight: 700;
+        font-display: swap;
+        src: url("./fonts/inter-700.woff2") format("woff2");
+      }
+      html, body, #root {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+        -webkit-touch-callout: none;
+        user-select: none;
+      }
+      .peek-selectable {
+        user-select: text !important;
+        -webkit-user-select: text !important;
+        cursor: text;
+      }
+      .peek-bold {
+        font-family: -apple-system, BlinkMacSystemFont, Inter, "Segoe UI Variable Display", "Segoe UI Semibold", "Segoe UI", system-ui, sans-serif;
+      }
+      .peek-scroll::-webkit-scrollbar { width: 7px; }
+      .peek-scroll::-webkit-scrollbar-track { background: transparent; }
+      .peek-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.22); border-radius: 4px; }
+      .peek-scroll::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.32); }
+      .peek-grain { position: relative; }
+      .peek-grain::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        opacity: 0.45;
+        mix-blend-mode: overlay;
+        pointer-events: none;
+      }
+      @property --peek-angle {
+        syntax: "<angle>";
+        initial-value: 0deg;
+        inherits: false;
+      }
+      :root {
+        --peek-ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --peek-ease-spring: cubic-bezier(0.34, 1.2, 0.64, 1);
+        --peek-duration: 0.2s;
+      }
+      .peek-interactive {
+        transition:
+          background var(--peek-duration) var(--peek-ease),
+          color var(--peek-duration) var(--peek-ease),
+          border-color var(--peek-duration) var(--peek-ease),
+          box-shadow var(--peek-duration) var(--peek-ease),
+          opacity var(--peek-duration) var(--peek-ease),
+          transform var(--peek-duration) var(--peek-ease);
+      }
+      .peek-recent-row {
+        transition:
+          background 0.18s var(--peek-ease),
+          border-color 0.18s var(--peek-ease),
+          box-shadow 0.18s var(--peek-ease),
+          opacity 0.18s var(--peek-ease);
+      }
+      .peek-recent-more {
+        transition: opacity 0.16s var(--peek-ease), transform 0.16s var(--peek-ease);
+      }
+      .peek-panel-shell {
+        transition:
+          opacity 0.22s var(--peek-ease),
+          transform 0.24s var(--peek-ease-spring),
+          visibility 0s linear 0.24s;
+      }
+      .peek-panel-shell--hidden {
+        opacity: 0;
+        transform: scale(0.97) translateY(10px);
+        pointer-events: none;
+        visibility: hidden;
+        transition:
+          opacity 0.2s var(--peek-ease),
+          transform 0.22s var(--peek-ease-spring),
+          visibility 0s linear 0.22s;
+      }
+      .peek-pop-in {
+        animation: peek-pop-in 0.2s var(--peek-ease) both;
+      }
+      @keyframes peek-pop-in {
+        from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+        to { opacity: 1; transform: none; }
+      }
+      .peek-fade-in {
+        animation: peek-fade-in 0.18s var(--peek-ease) both;
+      }
+      @keyframes peek-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      @keyframes peek-border-spin {
+        to { --peek-angle: 360deg; }
+      }
+      @keyframes peek-strip-label-in {
+        from { opacity: 0; transform: translateX(-6px); }
+        to { opacity: 1; transform: translateX(0); }
+      }
+      @keyframes peek-bubble-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.65; transform: scale(0.88); }
+      }
+      @keyframes peek-logo-dot-bounce {
+        0%, 70%, 100% { transform: translateY(0); opacity: 0.4; }
+        35% { transform: translateY(-10px); opacity: 1; }
+      }
+      .peek-logo-dot {
+        animation: peek-logo-dot-bounce 0.9s ease-in-out infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      @keyframes peek-refine-shimmer {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+      }
+      .peek-gradient-border {
+        --peek-angle: 0deg;
+        position: relative;
+        border-radius: 26px;
+        padding: 2.5px;
+        background: conic-gradient(from var(--peek-angle), #F472B6, #C084FC, #F0ABFC, #F472B6);
+        animation: peek-border-spin 5s linear infinite;
+        box-shadow: 0 20px 60px rgba(150,70,200,0.28);
+      }
+      /* Whole-screen capture indicator for the hotkey overlay: a hollow ring
+         (mask-composite punches out the center) so the real desktop stays
+         visible and click-through underneath — only the frame itself paints. */
+      .peek-gradient-frame {
+        --peek-angle: 0deg;
+        position: fixed;
+        /* top/left/width/height are set inline by App.jsx — full screen by
+           default, shrinking to hug the selected region once one is drawn. */
+        border-radius: 20px;
+        padding: 3px;
+        background: conic-gradient(from var(--peek-angle), #F472B6, #C084FC, #F0ABFC, #F472B6);
+        animation: peek-border-spin 5s linear infinite;
+        transition: left 0.18s ease, top 0.18s ease, width 0.18s ease, height 0.18s ease;
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        pointer-events: none;
+        z-index: 40;
+      }
+      .peek-input-dark::placeholder { color: rgba(255,255,255,0.42); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,72 @@
+{
+  "name": "peek",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Peek — a floating, hotkey-triggered screen Q&A overlay that answers locally through your own Claude Code or Codex CLI. No cloud, no redirect away from what you're doing.",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.peek.overlay",
+    "productName": "Peek",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "public/icon-192.png"
+    ],
+    "asarUnpack": [
+      "node_modules/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon-512.png"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "public/icon-512.png",
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true
+    }
+  },
+  "scripts": {
+    "desktop": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "postinstall": "electron-builder install-app-deps",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
+    "icons": "node scripts/generate-icons.mjs",
+    "dev": "vite --host --port 5176 --strictPort",
+    "build": "npm run icons && vite build",
+    "stop": "npx --yes kill-port 5176 || true"
+  },
+  "dependencies": {
+    "docx": "^9.7.1",
+    "koffi": "^3.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tesseract.js": "^7.0.0",
+    "uiohook-napi": "^1.5.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.2",
+    "sharp": "^0.34.3",
+    "vite": "^6.0.7"
+  }
+}
