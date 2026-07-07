@@ -6,7 +6,7 @@ import ImageOcrPanel from "./ImageOcrPanel.jsx";
 import RecordHotkey from "./RecordHotkey.jsx";
 import { OCR_PROMPT } from "./prompts.js";
 import { anchorRefineUi, REFINE_UI_SIZES } from "./refinePosition.js";
-import { IconClose, IconPeek, IconSparkle, IconScanText, IconDownload } from "./Icons.jsx";
+import { IconClose, IconPeek, IconSparkle } from "./Icons.jsx";
 
 const BACKEND_KEY = "peek-backend";
 
@@ -809,65 +809,6 @@ export default function App() {
           boxSizing: "border-box",
         }} />
       )}
-      {showFrame && panelData && !ocrPanel && (
-        <div
-          data-peek-ui="true"
-          className="peek-pop-in"
-          onMouseDown={(e) => e.stopPropagation()}
-          style={{
-            position: "fixed",
-            zIndex: 47,
-            display: "flex", alignItems: "stretch",
-            borderRadius: 999, overflow: "hidden",
-            background: "rgba(20,10,25,0.92)",
-            boxShadow: "0 8px 22px rgba(0,0,0,0.35)",
-            ...(selectionRect ? {
-              left: selectionRect.x + selectionRect.width / 2,
-              top: Math.min(selectionRect.y + selectionRect.height + 12, window.innerHeight - 48),
-              transform: "translateX(-50%)",
-            } : {
-              left: "50%",
-              bottom: 40,
-              transform: "translateX(-50%)",
-            }),
-          }}
-        >
-          <button
-            type="button"
-            className="peek-interactive"
-            onClick={extractTextFromCrop}
-            disabled={!!ocrPanel?.busy}
-            style={{
-              display: "flex", alignItems: "center", gap: 7,
-              padding: "8px 14px", border: "none",
-              background: "transparent",
-              color: "#fff", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-              whiteSpace: "nowrap", opacity: ocrPanel?.busy ? 0.6 : 1,
-            }}
-          >
-            <IconScanText style={{ width: 15, height: 15, flexShrink: 0 }} />
-            Copy text
-          </button>
-          <div style={{ width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.14)", margin: "8px 0" }} />
-          <button
-            type="button"
-            className="peek-interactive"
-            onClick={saveScreenshotFromCrop}
-            disabled={saveShotBusy}
-            title="Save cropped screenshot"
-            style={{
-              display: "flex", alignItems: "center", gap: 7,
-              padding: "8px 14px", border: "none",
-              background: "transparent",
-              color: "#fff", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-              whiteSpace: "nowrap", opacity: saveShotBusy ? 0.6 : 1,
-            }}
-          >
-            <IconDownload style={{ width: 15, height: 15, flexShrink: 0 }} />
-            {saveShotBusy ? "Saving…" : "Save screenshot"}
-          </button>
-        </div>
-      )}
       {showFrame && (
         <button onMouseDown={(e) => e.stopPropagation()} onClick={endPanel} title="Close" style={{
           position: "fixed",
@@ -1008,6 +949,11 @@ export default function App() {
             cropHistory={overlayMode === "image" ? cropHistory : []}
             activeCropIndex={activeCropIndex}
             onSelectCrop={selectCrop}
+            showImageCropActions={overlayMode === "image" && showFrame && !!panelData && !ocrPanel}
+            onExtractTextFromCrop={extractTextFromCrop}
+            onSaveScreenshotFromCrop={saveScreenshotFromCrop}
+            extractTextBusy={!!ocrPanel?.busy}
+            saveScreenshotBusy={saveShotBusy}
           />
         </div>
       )}

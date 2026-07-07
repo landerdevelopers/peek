@@ -3,7 +3,7 @@ import { LIGHT } from "./theme.js";
 import ChatTurn, { ThinkingBubble } from "./ChatTurn.jsx";
 import PillDropdown from "./PillDropdown.jsx";
 import { useVoiceInput } from "./useVoiceInput.js";
-import { IconClose, IconArrowUp, IconAttachment, IconMic, IconScanText, IconPin, IconMinimize } from "./Icons.jsx";
+import { IconClose, IconArrowUp, IconAttachment, IconMic, IconScanText, IconPin, IconMinimize, IconDownload } from "./Icons.jsx";
 import { OCR_PROMPT } from "./prompts.js";
 
 const BACKEND_KEY = "peek-backend";
@@ -14,6 +14,7 @@ const BACKEND_OPTIONS = [
 const DRAG_EDGE_MARGIN = 80;
 const COMPACT_W = 380;
 const EXPANDED_W = 520;
+const CROP_ACTIONS_EXTRA = 44; // gap + floating pill below the composer
 
 // Places the image-mode composer in the largest clear slot around the crop —
 // below, above, left, or right — so it never sits on top of the selection.
@@ -116,6 +117,8 @@ export default function Panel({
   data, mode, selectionRect, onClose, minimized, onMinimize, pinned, onTogglePin,
   initialQuestion, onHasContentChange, onBusyChange, onAnswerReady,
   cropHistory = [], activeCropIndex = 0, onSelectCrop,
+  showImageCropActions = false, onExtractTextFromCrop, onSaveScreenshotFromCrop,
+  extractTextBusy = false, saveScreenshotBusy = false,
 }) {
   const [thread, setThread] = useState([]); // [{q, a}]
   const [input, setInput] = useState("");
@@ -339,7 +342,8 @@ export default function Panel({
   const isComposerOnly = expanded && !hasThread;
   const showToolbar = input.trim().length > 0 || busy;
 
-  const heightEstimate = isMinimal ? 52 : hasThread ? 300 : showToolbar ? 100 : 52;
+  const heightEstimate = (isMinimal ? 52 : hasThread ? 300 : showToolbar ? 100 : 52)
+    + (showImageCropActions ? CROP_ACTIONS_EXTRA : 0);
   const imageLayout = mode === "image" && !dragPos
     ? computeImagePanelLayout(selectionRect, { width: panelWidth, heightEstimate })
     : null;
@@ -349,17 +353,27 @@ export default function Panel({
     : imageLayout?.pos ?? { left: "50%", bottom: 32, transform: "translateX(-50%)" };
   const panelMaxHeight = imageLayout?.maxHeight ?? "74vh";
 
-  const shellStyle = {
+  const wrapperStyle = {
     position: "fixed",
     ...panelPos,
     width: panelWidth,
     maxWidth: "92vw",
-    maxHeight: panelMaxHeight,
     zIndex: 48,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 8,
+    cursor: "default",
+    transition: "width 0.22s ease, top 0.22s ease, left 0.22s ease",
+  };
+
+  const shellStyle = {
+    width: "100%",
+    maxHeight: panelMaxHeight,
     cursor: "default",
     display: "flex",
     flexDirection: "column",
-    transition: "width 0.22s ease, top 0.22s ease, left 0.22s ease, box-shadow 0.22s ease, background 0.22s ease",
+    transition: "width 0.22s ease, box-shadow 0.22s ease, background 0.22s ease",
     ...(isMinimal ? {
       background: "rgba(22,22,26,0.96)",
       backdropFilter: "blur(14px)",
@@ -526,11 +540,14 @@ export default function Panel({
 
   return (
     <div
-      ref={panelRef}
       data-peek-ui="true"
       className={`peek-panel-shell${minimized ? " peek-panel-shell--hidden" : ""}`}
-      style={shellStyle}
+      style={wrapperStyle}
       aria-hidden={minimized}
+    >
+    <div
+      ref={panelRef}
+      style={shellStyle}
     >
       {isMinimal ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 10px 9px 14px" }}>
@@ -635,6 +652,58 @@ export default function Panel({
           </div>
         </>
       )}
+    </div>
+
+    {showImageCropActions && (
+      <div
+        className="peek-pop-in peek-interactive"
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          alignSelf: "center",
+          display: "flex",
+          alignItems: "stretch",
+          maxWidth: "100%",
+          borderRadius: 999,
+          overflow: "hidden",
+          background: "rgba(20,10,25,0.92)",
+          boxShadow: "0 8px 22px rgba(0,0,0,0.35)",
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          onClick={onExtractTextFromCrop}
+          disabled={extractTextBusy}
+          style={{
+            display: "flex", alignItems: "center", gap: 7,
+            padding: "8px 14px", border: "none",
+            background: "transparent",
+            color: "#fff", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+            whiteSpace: "nowrap", opacity: extractTextBusy ? 0.6 : 1,
+          }}
+        >
+          <IconScanText style={{ width: 15, height: 15, flexShrink: 0 }} />
+          Copy text
+        </button>
+        <div style={{ width: 1, alignSelf: "stretch", background: "rgba(255,255,255,0.14)", margin: "8px 0" }} />
+        <button
+          type="button"
+          onClick={onSaveScreenshotFromCrop}
+          disabled={saveScreenshotBusy}
+          title="Save cropped screenshot"
+          style={{
+            display: "flex", alignItems: "center", gap: 7,
+            padding: "8px 14px", border: "none",
+            background: "transparent",
+            color: "#fff", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+            whiteSpace: "nowrap", opacity: saveScreenshotBusy ? 0.6 : 1,
+          }}
+        >
+          <IconDownload style={{ width: 15, height: 15, flexShrink: 0 }} />
+          {saveScreenshotBusy ? "Saving…" : "Save screenshot"}
+        </button>
+      </div>
+    )}
     </div>
   );
 }
