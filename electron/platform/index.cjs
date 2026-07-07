@@ -10,7 +10,7 @@ if (process.platform === "win32") {
 } else {
   native = {
     getForegroundWindowInfo: () => ({
-      handle: null, processName: "", windowClass: "", windowTitle: "", clipSeq: "",
+      handle: null, processName: "", windowClass: "", windowTitle: "", url: "", clipSeq: "",
     }),
     isTerminalWindow: () => false,
     waitForClipboardSeqChange: async () => false,

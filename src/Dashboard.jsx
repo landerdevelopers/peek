@@ -516,7 +516,7 @@ function SidebarMenuItem({ icon, label, onClick, trailing }) {
 const COMPOSER_INPUT_MAX_H = 320;
 
 function Composer({ input, setInput, onKeyDown, onSend, busy, backend, setBackend, inputRef, centered, attachment, onPickImage, onClearAttachment, onExtractText, extractBusy }) {
-  const { listening, voiceError, toggleVoice } = useVoiceInput(input, setInput);
+  const { listening, voiceError, voiceLoading, toggleVoice } = useVoiceInput(input, setInput);
 
   useEffect(() => {
     const el = inputRef.current;

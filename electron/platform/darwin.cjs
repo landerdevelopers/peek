@@ -31,6 +31,8 @@ function normalizeProcessName(appName) {
     "mozilla firefox": "firefox",
     "visual studio code": "code",
     safari: "safari",
+    arc: "arc",
+    "brave browser": "brave",
     mail: "mail",
     messages: "messages",
     slack: "slack",
@@ -41,24 +43,67 @@ function normalizeProcessName(appName) {
   return map[raw] || raw.replace(/\s+/g, "");
 }
 
+function getBrowserTabInfo(appName) {
+  const name = String(appName || "");
+  const scripts = {
+    "Google Chrome": {
+      url: `tell application "Google Chrome" to get URL of active tab of front window`,
+      title: `tell application "Google Chrome" to get title of active tab of front window`,
+    },
+    Safari: {
+      url: `tell application "Safari" to get URL of current tab of front window`,
+      title: `tell application "Safari" to get name of current tab of front window`,
+    },
+    "Microsoft Edge": {
+      url: `tell application "Microsoft Edge" to get URL of active tab of front window`,
+      title: `tell application "Microsoft Edge" to get title of active tab of front window`,
+    },
+    Arc: {
+      url: `tell application "Arc" to get URL of active tab of front window`,
+      title: `tell application "Arc" to get title of active tab of front window`,
+    },
+    Brave: {
+      url: `tell application "Brave Browser" to get URL of active tab of front window`,
+      title: `tell application "Brave Browser" to get title of active tab of front window`,
+    },
+  };
+  const spec = scripts[name];
+  if (!spec) return { url: "", title: "" };
+  return {
+    url: runOsascript(spec.url),
+    title: runOsascript(spec.title),
+  };
+}
+
 function getForegroundWindowInfo() {
   const appName = runOsascript(
     'tell application "System Events" to get name of first application process whose frontmost is true',
   );
   if (!appName) {
-    return { handle: null, processName: "", windowClass: "", windowTitle: "", clipSeq: "" };
+    return { handle: null, processName: "", windowClass: "", windowTitle: "", url: "", clipSeq: "" };
   }
   let windowTitle = "";
-  try {
-    windowTitle = runOsascript(
-      'tell application "System Events" to tell (first application process whose frontmost is true) to get name of front window',
-    );
-  } catch {}
+  let url = "";
+  const proc = normalizeProcessName(appName);
+  const browserProcs = new Set(["chrome", "safari", "msedge", "arc", "brave", "firefox", "opera", "vivaldi"]);
+  if (browserProcs.has(proc)) {
+    const tab = getBrowserTabInfo(appName);
+    url = tab.url || "";
+    windowTitle = tab.title || "";
+  }
+  if (!windowTitle) {
+    try {
+      windowTitle = runOsascript(
+        'tell application "System Events" to tell (first application process whose frontmost is true) to get name of front window',
+      );
+    } catch {}
+  }
   return {
     handle: appName,
-    processName: normalizeProcessName(appName),
+    processName: proc,
     windowClass: "",
     windowTitle,
+    url,
     clipSeq: "",
   };
 }

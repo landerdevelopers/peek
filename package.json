@@ -17,7 +17,8 @@
       "public/icon-192.png"
     ],
     "asarUnpack": [
-      "node_modules/**"
+      "node_modules/**",
+      "node_modules/@xenova/**"
     ],
     "win": {
       "target": "nsis",
@@ -32,7 +33,10 @@
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Peek uses your microphone to transcribe voice questions locally on your device."
+      }
     },
     "nsis": {
       "oneClick": false,
@@ -55,6 +59,7 @@
     "stop": "npx --yes kill-port 5176 || true"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
     "docx": "^9.7.1",
     "koffi": "^3.1.0",
     "react": "^18.3.1",

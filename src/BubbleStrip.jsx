@@ -1,9 +1,5 @@
 import { useState } from "react";
 import { IconImage, IconChatTab, IconMic, IconCondense, IconWand, IconArrowLeft } from "./Icons.jsx";
-
-// Edge-docked icon strip beside the bubble. Image/Text/Voice appear on bubble
-// hover; a white "active chat" tab stays visible whenever a minimized chat
-// session is waiting or still thinking.
 const BTN = 44;
 const STRIP_ITEM_PULL = 10;
 const PULL_EASE = "0.24s cubic-bezier(0.34, 1.25, 0.64, 1)";
@@ -47,15 +43,13 @@ export default function BubbleStrip({
     else onText();
   };
 
-  const chatLabel = activeChat?.kind === "refine"
-    ? (activeChat?.ready ? "Refine ready" : activeChat?.busy ? "Refining…" : "Open Refine")
-    : activeChat?.ready
+  const chatLabel = activeChat?.ready
     ? "Answer ready"
     : activeChat?.busy
     ? "Thinking…"
     : "Open chat";
 
-  const ChatIcon = activeChat?.kind === "refine" ? IconWand : IconChatTab;
+  const ChatIcon = IconChatTab;
 
   return (
     <div

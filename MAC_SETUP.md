@@ -61,37 +61,43 @@ You should see:
 - A **Peek dashboard** window
 - A **menu bar icon** (top-right, near Wi‑Fi/battery)
 
-Default hotkey on Mac: **⌘ + ⌥ + A** (Command + Option + A).  
+Default hotkey on Mac: **⌘ + ⌥ + A** (Command + Option + A).
 Check the menu bar icon if that combo is already taken by another app.
 
 ---
 
 ## macOS permissions (required)
 
-Grant both, then **quit Peek completely** and run `npm run desktop` again.
+Grant all three, then **quit Peek completely** and run `npm run desktop` again.
+
+> **Tip:** Grant permissions from the **dashboard window** (not while the overlay bubble is open). Peek now hides its always-on-top overlay during permission prompts so macOS dialogs stay clickable.
 
 ### Accessibility
 
-**System Settings → Privacy & Security → Accessibility**  
+**System Settings → Privacy & Security → Accessibility**
 Enable **Peek** (or **Electron** while running from Terminal).
 
 Needed for: text selection in other apps, Refine, Replace (⌘C / ⌘V simulation).
 
 ### Screen Recording
 
-**System Settings → Privacy & Security → Screen Recording**  
+**System Settings → Privacy & Security → Screen Recording**
 Enable **Peek** (or **Electron**).
 
 Needed for: screenshot capture.
+
+### Microphone
+
+**System Settings → Privacy & Security → Microphone**
+Enable **Peek** (or **Electron** while running from Terminal).
+
+Needed for: Voice mode (local on-device transcription).
 
 ---
 
 ## Quick test
 
-1. Press **⌘ + ⌥ + A** → bubble appears on screen  
-2. Image mode → drag a region → ask a question → get an answer  
-3. Open Safari → select text → **Refine** pill should appear  
-4. Menu bar icon → confirm hotkey shows **⌘** symbols  
+Image mode → drag a region → ask a question → get an answer
 
 ---
 
@@ -137,8 +143,9 @@ First launch of an unsigned build: right-click the app → **Open**.
 | Hotkey does nothing | Menu bar → see bound key; **Change hotkey…** → try **⌘ + ⌥ + Space** |
 | Refine never appears | Accessibility permission → quit Peek → `npm run desktop` |
 | Screenshot black / capture fails | Screen Recording permission → quit → relaunch |
+| Voice not working / no mic | Microphone permission → quit → relaunch; first use downloads ~40MB Whisper model |
 | `claude: command not found` | `npm install -g @anthropic-ai/claude-code` and `claude login` |
-| Terminal warns about uiohook | Grant Accessibility, restart app |
+| Permission dialog hidden behind Peek | Quit Peek, reopen, grant from dashboard; overlay hides during prompts now |
 
 ---
 
@@ -160,4 +167,4 @@ npm install
 npm run desktop
 ```
 
-Then: **Accessibility** + **Screen Recording** in System Settings → quit Peek → `npm run desktop` again.
+Then: **Accessibility** + **Screen Recording** + **Microphone** in System Settings → quit Peek → `npm run desktop` again.

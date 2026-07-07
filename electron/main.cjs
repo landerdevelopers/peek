@@ -1,10 +1,13 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, session, globalShortcut, desktopCapturer, Notification, dialog, clipboard } = require("electron");
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, session, globalShortcut, desktopCapturer, Notification, dialog, clipboard, systemPreferences } = require("electron");
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
 const backend = require("./backend.cjs");
+const voiceTranscribe = require("./voiceTranscribe.cjs");
 const store = require("./store.cjs");
 const platform = require("./platform/index.cjs");
+const micAccess = require("./platform/micAccess.cjs");
+const { createScreenCoords } = require("./screenCoords.cjs");
 const ocr = require("./ocr.cjs");
 const textExport = require("./export.cjs");
 const { uIOhook, UiohookKey } = require("uiohook-napi");
@@ -25,6 +28,7 @@ const CAPTURE_MAX = Number(process.env.PEEK_CAPTURE_MAX || 2200);
 // claimed by another app. These are just a first-run starting point; the
 // bound key is always persisted and always user-changeable (tray → Change hotkey…).
 const DEFAULT_HOTKEY_CANDIDATES = platform.defaultHotkeyCandidates();
+const screenCoords = createScreenCoords(screen, () => overlayWin);
 
 const CONFIG_DIR = path.join(os.homedir(), ".peek");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -67,6 +71,68 @@ let panelSessionCrops = []; // all crop files for the active panel chat
 // True for the duration of peek:capture-now's own hide()/show() dance — see
 // the "blur" listener below for why this needs to exist.
 let suppressOverlayBlurReport = false;
+
+// macOS system permission sheets sit *under* always-on-top overlays. Hide the
+// overlay (and focus the dashboard) while the user interacts with them.
+let overlaySuspendDepth = 0;
+let overlaySuspendSnapshot = null;
+
+function focusDashboard() {
+  if (!dashboardWin || dashboardWin.isDestroyed()) return;
+  dashboardWin.show();
+  dashboardWin.focus();
+  dashboardWin.moveTop();
+}
+
+function suspendOverlayForSystemUI({ focusDashboard: focusDash = true } = {}) {
+  if (!overlayWin || overlayWin.isDestroyed()) return () => {};
+  overlaySuspendDepth++;
+  if (overlaySuspendDepth === 1) {
+    overlaySuspendSnapshot = {
+      wasVisible: overlayWin.isVisible(),
+      modeArmed,
+    };
+    overlayWin.setAlwaysOnTop(false);
+    overlayWin.hide();
+    if (focusDash) focusDashboard();
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    overlaySuspendDepth = Math.max(0, overlaySuspendDepth - 1);
+    if (overlaySuspendDepth !== 0 || !overlaySuspendSnapshot) return;
+    const snap = overlaySuspendSnapshot;
+    overlaySuspendSnapshot = null;
+    if (!snap.wasVisible || !snap.modeArmed) return;
+    overlayWin.show();
+    overlayWin.setAlwaysOnTop(true, "screen-saver");
+    overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    overlayWin.moveTop();
+    overlayWin.setIgnoreMouseEvents(true, { forward: true });
+  };
+}
+
+/** macOS: accessibility prompt must not appear under the overlay. */
+function ensureMacAccessibilityForOverlay() {
+  if (!platform.isMac) return true;
+  if (systemPreferences.isTrustedAccessibilityClient(false)) return true;
+
+  const resume = suspendOverlayForSystemUI();
+  systemPreferences.isTrustedAccessibilityClient(true);
+  const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+  if (trusted) {
+    resume();
+    return true;
+  }
+
+  new Notification({
+    title: "Peek needs Accessibility",
+    body: "Enable Peek in System Settings → Privacy & Security → Accessibility, then press the hotkey again.",
+  }).show();
+  // Leave overlay hidden so System Settings stays clickable.
+  return false;
+}
 
 function cleanupCapture() {
   if (capturedPath) { try { fs.unlinkSync(capturedPath); } catch {} capturedPath = null; }
@@ -118,14 +184,10 @@ function createWindow() {
     else overlayWin.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   });
 
-  // This window itself stays up (shown, always-on-top, click-through) for
-  // the app's whole lifetime — shown once here at launch and never hidden
-  // again except transiently while grabbing a screenshot (see
-  // peek:capture-now) — matching buddy's always-visible/click-through-by-
-  // default overlay technique. What's actually VISIBLE on it (the bubble
-  // itself, then whatever's opened from it) is a renderer-side concern now,
-  // driven by activatePeek/deactivatePeek — see App.jsx's `mode`.
-  overlayWin.once("ready-to-show", () => overlayWin.show());
+  // Overlay stays created but hidden until activatePeek — showing it at launch
+  // blocks macOS permission sheets (Accessibility, Screen Recording, Mic)
+  // because the window is always-on-top at screen-saver level.
+  overlayWin.once("ready-to-show", () => {});
 
   // Native, main-process-level focus tracking — used to auto-minimize the
   // composer the instant the OS shifts focus away from this window (clicking
@@ -364,13 +426,9 @@ function onSelectionMouseUp(e) {
     }
     return;
   }
-  // uiohook reports physical screen px; the overlay window is a CSS layer
-  // anchored at the primary display's workArea origin — convert so the
-  // renderer can anchor its "Refine" pill right at the release point.
-  const display = screen.getPrimaryDisplay();
-  const scaleFactor = display.scaleFactor || 1;
-  const x = (e.x - display.workArea.x) / scaleFactor;
-  const y = (e.y - display.workArea.y) / scaleFactor;
+  // uiohook: macOS reports Cocoa points; Windows reports physical screen px.
+  // Convert into overlay-window CSS px via screenCoords (see screenCoords.cjs).
+  const { x, y } = screenCoords.uiohookToOverlay(e.x, e.y);
   noteSelectionPending(x, y);
 }
 
@@ -387,9 +445,8 @@ function onSelectionKeyUp(e) {
   const isSelectAll = platform.isSelectAllKeyEvent(e);
   const isShiftExtend = e.shiftKey && SELECTION_NAV_KEYS.has(e.keycode);
   if (!isSelectAll && !isShiftExtend) return;
-  const cursor = screen.getCursorScreenPoint();
-  const { workArea } = screen.getPrimaryDisplay();
-  noteSelectionPending(cursor.x - workArea.x, cursor.y - workArea.y);
+  const { x, y } = screenCoords.cursorToOverlay();
+  noteSelectionPending(x, y);
 }
 
 function startSelectionHook() {
@@ -432,6 +489,7 @@ function stopSelectionHook() {
 // just while a particular sub-mode happens to be open.
 function activatePeek() {
   if (!overlayWin) return;
+  if (!ensureMacAccessibilityForOverlay()) return;
   cleanupCapture();
   lastCapture = null;
   overlayWin.show();
@@ -446,6 +504,7 @@ function activatePeek() {
 function deactivatePeek() {
   closeAll();
   overlayWin?.webContents.send("peek:deactivate");
+  if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide();
 }
 
 // Whether Peek is active at all right now (bubble visible, in any of its
@@ -697,6 +756,36 @@ ipcMain.handle("peek:sessions:rename", (_e, id, title) => {
 
 ipcMain.handle("peek:clipboard-write", (_e, text) => { clipboard.writeText(String(text || "")); return { ok: true }; });
 
+ipcMain.handle("peek:ensure-mic-access", async () => {
+  const resume = suspendOverlayForSystemUI();
+  try {
+    return await micAccess.ensureMicrophoneAccess();
+  } finally {
+    resume();
+  }
+});
+ipcMain.handle("peek:open-mic-settings", () => {
+  const resume = suspendOverlayForSystemUI();
+  try {
+    micAccess.openMicrophoneSettings();
+    return { ok: true };
+  } finally {
+    setTimeout(resume, 400);
+  }
+});
+
+ipcMain.handle("peek:transcribe-audio", async (_e, meta, buffer) => {
+  try {
+    const len = meta?.length || 0;
+    if (!len || !buffer) return "";
+    const samples = new Float32Array(buffer, 0, len);
+    return await voiceTranscribe.transcribeAudio(samples, meta.sampleRate || 16000);
+  } catch (err) {
+    console.warn("[peek] transcribe-audio:", err.message);
+    return { error: err.message || "Transcription failed" };
+  }
+});
+
 ipcMain.handle("peek:ocr-layout", async (_e, imagePath) => {
   if (!imagePath) return { error: "no image" };
   try {
@@ -751,6 +840,7 @@ ipcMain.handle("peek:replace-selection", async (_e, text) => {
 });
 
 ipcMain.handle("peek:platform-info", () => ({
+  platform: process.platform,
   isMac: platform.isMac,
   loginItemLabel: platform.loginItemLabel(),
   modifierHints: platform.modifierHintLabels(),
@@ -895,8 +985,20 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     if (process.platform === "win32") app.setAppUserModelId("com.peek.overlay");
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === "notifications" || permission === "media"));
+    const allowMedia = (permission, details) => {
+      if (permission === "notifications") return true;
+      if (permission === "media" || permission === "audioCapture" || permission === "videoCapture") return true;
+      if (permission === "media" && details?.mediaTypes?.includes?.("audio")) return true;
+      return false;
+    };
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, cb, details) => {
+      cb(allowMedia(permission, details));
+    });
+    session.defaultSession.setPermissionCheckHandler((_wc, permission, _origin, details) => {
+      return allowMedia(permission, details);
+    });
     createWindow();
+    voiceTranscribe.warmup();
     registerShortcut(); // before the tray so its label shows the real bound key
     createTray();
     createDashboardWindow(); // Peek's main app window — shown on launch

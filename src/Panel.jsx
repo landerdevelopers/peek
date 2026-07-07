@@ -136,7 +136,7 @@ export default function Panel({
   const openedAt = useRef(Date.now());
   const minimizedRef = useRef(minimized);
   const askGenRef = useRef(0);
-  const { listening, voiceError, toggleVoice } = useVoiceInput(input, setInput);
+  const { listening, voiceError, voiceLoading, toggleVoice } = useVoiceInput(input, setInput);
 
   useEffect(() => { minimizedRef.current = minimized; }, [minimized]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
@@ -300,7 +300,8 @@ export default function Panel({
   };
 
   const placeholder = mode === "image" ? "Ask about this…"
-    : mode === "voice" && listening ? "Listening…"
+    : mode === "voice" && voiceLoading ? "Loading voice model…"
+    : mode === "voice" && listening ? "Listening… speak now"
     : "Ask me anything…";
 
   // The composer auto-minimizes the instant it loses focus — i.e. the OS

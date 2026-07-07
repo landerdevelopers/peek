@@ -10,6 +10,19 @@ contextBridge.exposeInMainWorld("peekDesktop", {
   captureNow: () => ipcRenderer.invoke("peek:capture-now"),
   grabSelection: () => ipcRenderer.invoke("peek:grab-selection"),
   copyToClipboard: (text) => ipcRenderer.invoke("peek:clipboard-write", text),
+  ensureMicAccess: () => ipcRenderer.invoke("peek:ensure-mic-access"),
+  openMicSettings: () => ipcRenderer.invoke("peek:open-mic-settings"),
+  transcribeAudio: (samples, sampleRate = 16000) => {
+    const f32 = samples instanceof Float32Array ? samples : new Float32Array(samples);
+    return ipcRenderer.invoke(
+      "peek:transcribe-audio",
+      { sampleRate, length: f32.length },
+      f32.buffer.slice(f32.byteOffset, f32.byteOffset + f32.byteLength),
+    ).then((res) => {
+      if (res && typeof res === "object" && res.error) throw new Error(res.error);
+      return res;
+    });
+  },
   ocrLayout: (imagePath) => ipcRenderer.invoke("peek:ocr-layout", imagePath),
   replaceSelection: (text) => ipcRenderer.invoke("peek:replace-selection", text),
   notifyPanelExpanded: (armed) => ipcRenderer.send("peek:panel-expanded", armed),

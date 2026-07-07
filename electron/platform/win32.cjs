@@ -79,7 +79,7 @@ function readProcessName(pid) {
 function getForegroundWindowInfo() {
   const hwnd = GetForegroundWindow();
   if (!hwnd) {
-    return { handle: null, processName: "", windowClass: "", windowTitle: "", clipSeq: GetClipboardSequenceNumber() };
+    return { handle: null, processName: "", windowClass: "", windowTitle: "", url: "", clipSeq: GetClipboardSequenceNumber() };
   }
   const pidOut = [0];
   GetWindowThreadProcessId(hwnd, pidOut);
@@ -90,6 +90,7 @@ function getForegroundWindowInfo() {
     processName: readProcessName(pidOut[0]),
     windowClass,
     windowTitle,
+    url: "",
     clipSeq: GetClipboardSequenceNumber(),
   };
 }

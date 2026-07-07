@@ -3,19 +3,14 @@ import { LIGHT } from "./theme.js";
 import { RichText } from "./Markdown.jsx";
 import { ThinkingBubble } from "./ChatTurn.jsx";
 import { getRefineActions } from "./refineContext.js";
+import { anchorRefinePopup } from "./refinePosition.js";
 import SaveAsMenu from "./SaveAsMenu.jsx";
 import {
-  IconClose, IconPeek, IconSettings, IconMinimize, IconArrowUp,
+  IconClose, IconPeek, IconSettings, IconArrowUp,
 } from "./Icons.jsx";
 
 const BACKEND_KEY = "peek-backend";
 const POPUP_WIDTH = 420;
-
-function shortSource(source) {
-  const s = String(source || "").trim();
-  if (!s) return "";
-  return s.length > 42 ? `${s.slice(0, 42)}…` : s;
-}
 
 function stripRefineOutput(text) {
   let t = String(text || "").trim();
@@ -61,7 +56,7 @@ const closeBtnStyle = {
  * different action (or the same one again).
  */
 export default function SelectionPopup({
-  selectedText, selectionPos, refineContext, minimized, onMinimize, onClear, onBusyChange, onAnswerReady,
+  selectedText, selectionPos, onClear,
 }) {
   const [backend] = useState(() => localStorage.getItem(BACKEND_KEY) || "claude");
   const [view, setView] = useState("palette"); // "palette" | "answer" | "chat"
@@ -79,40 +74,24 @@ export default function SelectionPopup({
   const [chatBusy, setChatBusy] = useState(false);
 
   const chatScrollRef = useRef(null);
-  const openedAt = useRef(Date.now());
-  const minimizedRef = useRef(minimized);
 
-  useEffect(() => { minimizedRef.current = minimized; }, [minimized]);
-  useEffect(() => { onBusyChange?.(busy || chatBusy); }, [busy, chatBusy, onBusyChange]);
-  useEffect(() => {
-    if (!minimized) openedAt.current = Date.now();
-  }, [minimized]);
+  const quickActions = useMemo(() => getRefineActions().actions, []);
 
   useEffect(() => {
-    if (minimized) return;
-    return window.peekDesktop.onOverlayBlur?.(() => {
-      if (Date.now() - openedAt.current < 600) return;
-      onMinimize?.();
-    });
-  }, [minimized, onMinimize]);
+    setPaletteQuery("");
+    setPaletteHighlight(0);
+  }, [selectedText]);
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: "smooth" });
   }, [chatThread, chatBusy]);
 
-  const { profile, actions: quickActions } = useMemo(
-    () => getRefineActions(refineContext, selectedText),
-    [refineContext, selectedText],
-  );
-
   useEffect(() => {
     setPaletteHighlight(0);
     setPaletteQuery("");
-  }, [profile.id, selectedText]);
+  }, [selectedText]);
 
-  // Escape is handled centrally in App.jsx (with clear precedence over a
-  // panel that might also want to react to it) rather than here — see its
-  // top-level keydown effect.
+  // Escape is handled centrally in App.jsx
 
   const runPrompt = async (instruction, label) => {
     if (busy) return;
@@ -132,14 +111,12 @@ export default function SelectionPopup({
     if (res?.error || !res?.text) {
       setError(res?.error || "No answer.");
       setView("palette");
-      if (minimizedRef.current) onAnswerReady?.({ label, error: res?.error || "No answer." });
       return;
     }
     const text = stripRefineOutput(res.text);
     setAnswer(text);
     setEdited(text);
     setView("answer");
-    if (minimizedRef.current) onAnswerReady?.({ label });
   };
 
   const filteredActions = paletteQuery.trim()
@@ -240,11 +217,8 @@ export default function SelectionPopup({
   // regardless of where on the display the selection was made. The actual
   // rendered cap (below, per view) is relative to the viewport so it scales
   // with screen size instead of hitting a cramped fixed pixel ceiling.
-  const estimatedH = view === "chat" ? 600 : view === "answer" || view === "loading" ? 560 : 380;
-  const left = Math.min(Math.max(selectionPos.x - 100, 8), window.innerWidth - POPUP_WIDTH - 8);
-  const top = Math.min(Math.max(selectionPos.y + 10, 8), window.innerHeight - estimatedH - 8);
-  // The answer/chat cards' own maxHeight: bounded by both a generous
-  // viewport-relative ceiling and whatever room is actually left below `top`.
+  const viewKey = view === "loading" ? "loading" : view;
+  const { left, top } = anchorRefinePopup(selectionPos, viewKey);
   const tallViewMaxHeight = Math.min(window.innerHeight * 0.72, window.innerHeight - top - 24);
 
   const chatExportText = chatThread.length
@@ -266,13 +240,6 @@ export default function SelectionPopup({
       <button
         type="button"
         className="peek-interactive"
-        onClick={onMinimize}
-        title="Minimize — keep working, we'll notify you when ready"
-        style={chromeBtn(dark)}
-      ><IconMinimize style={{ width: 13, height: 13 }} /></button>
-      <button
-        type="button"
-        className="peek-interactive"
         onClick={onClear}
         title="Close"
         style={chromeBtn(dark)}
@@ -286,9 +253,8 @@ export default function SelectionPopup({
     <div
       data-peek-ui="true"
       onMouseDown={(e) => e.stopPropagation()}
-      className={`peek-panel-shell${minimized ? " peek-panel-shell--hidden" : ""}`}
+      className="peek-panel-shell"
       style={{ position: "fixed", left, top, zIndex: 100, width: POPUP_WIDTH }}
-      aria-hidden={minimized}
     >
       {view === "palette" && (
         <div className="peek-pop-in" style={{
@@ -314,22 +280,6 @@ export default function SelectionPopup({
               }}
             />
             <IconSettings style={{ color: "rgba(255,255,255,0.35)", flexShrink: 0 }} />
-          </div>
-          <div style={{
-            display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
-            padding: "0 10px 8px", fontSize: 11, color: "rgba(255,255,255,0.42)",
-          }}>
-            <span style={{
-              padding: "2px 8px", borderRadius: 999,
-              background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.72)", fontWeight: 600,
-            }}>
-              {profile.label}
-            </span>
-            {shortSource(profile.source) && (
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {shortSource(profile.source)}
-              </span>
-            )}
           </div>
           <div className="peek-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto" }}>
             {filteredActions.map((a, i) => {
@@ -441,9 +391,6 @@ export default function SelectionPopup({
                   borderRadius: 7, padding: "5px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
                 }}
               />
-              <button type="button" className="peek-interactive" onClick={onMinimize} title="Minimize" style={{ ...closeBtnStyle, position: "static" }}>
-                <IconMinimize style={{ width: 13, height: 13 }} />
-              </button>
               <button type="button" className="peek-interactive" onClick={onClear} title="Close" style={{ ...closeBtnStyle, position: "static" }}>
                 <IconClose />
               </button>

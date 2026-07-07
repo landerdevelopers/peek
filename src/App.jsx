@@ -5,6 +5,7 @@ import SelectionPopup from "./SelectionPopup.jsx";
 import ImageOcrPanel from "./ImageOcrPanel.jsx";
 import RecordHotkey from "./RecordHotkey.jsx";
 import { OCR_PROMPT } from "./prompts.js";
+import { anchorRefineUi, REFINE_UI_SIZES } from "./refinePosition.js";
 import { IconClose, IconPeek, IconSparkle, IconScanText, IconDownload } from "./Icons.jsx";
 
 const BACKEND_KEY = "peek-backend";
@@ -196,11 +197,7 @@ export default function App() {
   const [panelBusy, setPanelBusy] = useState(false);
   const [answerReady, setAnswerReady] = useState(false);
   const [panelKey, setPanelKey] = useState(0);
-  const [refineMinimized, setRefineMinimized] = useState(false);
-  const [refineBusy, setRefineBusy] = useState(false);
-  const [refineReady, setRefineReady] = useState(false);
   const [refineKey, setRefineKey] = useState(0);
-  const [refineContext, setRefineContext] = useState(null);
   const [bubblePos, setBubblePos] = useState(loadBubblePos);
   // The close (×) badge only shows while actually hovering the bubble —
   // mouseenter/mouseleave (not mouseover/mouseout) so hovering the badge
@@ -258,12 +255,8 @@ export default function App() {
     setPanelHasContent(false);
     setPanelBusy(false);
     setAnswerReady(false);
-    setRefineMinimized(false);
-    setRefineBusy(false);
-    setRefineReady(false);
     setCropHistory([]);
     setActiveCropIndex(0);
-    setRefineContext(null);
   };
 
   const addCrop = (res, rect) => {
@@ -320,20 +313,7 @@ export default function App() {
     });
   };
 
-  const handleRefineAnswerReady = ({ label, error }) => {
-    setRefineReady(true);
-    const preview = (label || "Refine").length > 60 ? `${(label || "Refine").slice(0, 60)}…` : (label || "Refine");
-    window.peekDesktop.notify?.({
-      title: error ? "Peek — couldn't refine" : "Peek — refine ready",
-      body: error ? preview : `Tap to view: "${preview}"`,
-    });
-  };
-
-  const restoreMinimizedSession = () => {
-    if (refineMinimized) {
-      setRefineMinimized(false);
-      setRefineReady(false);
-    }
+  const restoreMinimizedPanel = () => {
     if (mode === "panel" && minimized) {
       setMinimized(false);
       setAnswerReady(false);
@@ -371,7 +351,7 @@ export default function App() {
     const offRecord = window.peekDesktop.onRecord(() => setMode("record"));
     const offOverlayBlur = window.peekDesktop.onOverlayBlur?.(() => setHasOsFocus(false));
     const offOverlayFocus = window.peekDesktop.onOverlayFocus?.(() => setHasOsFocus(true));
-    const offRestorePanel = window.peekDesktop.onRestorePanel?.(() => restoreMinimizedSession());
+    const offRestorePanel = window.peekDesktop.onRestorePanel?.(() => restoreMinimizedPanel());
     return () => {
       offActivate?.(); offDeactivate?.(); offSelectionPending?.(); offSelectionCleared?.(); offRecord();
       offOverlayBlur?.(); offOverlayFocus?.(); offRestorePanel?.();
@@ -397,10 +377,6 @@ export default function App() {
     if (res?.text) {
       setSelectedText(res.text);
       setSelectionPos(pos);
-      setRefineContext(res.context || null);
-      setRefineMinimized(false);
-      setRefineBusy(false);
-      setRefineReady(false);
       setRefineKey((k) => k + 1);
       return;
     }
@@ -411,15 +387,11 @@ export default function App() {
   const clearRefineSession = () => {
     setSelectedText(null);
     setSelectionPos(null);
-    setRefineMinimized(false);
-    setRefineBusy(false);
-    setRefineReady(false);
     setRefineKey((k) => k + 1);
-    setRefineContext(null);
   };
 
   const refineSessionActive = !!selectedText && !!selectionPos;
-  const selectionPopupVisible = refineSessionActive && !refineMinimized;
+  const selectionPopupVisible = refineSessionActive;
   const ocrPanelOpen = !!ocrPanel;
 
   // Image-mode panel needs the full-screen backdrop for drag-to-reselect; every
@@ -613,7 +585,7 @@ export default function App() {
     const onKey = (e) => {
       if (e.key !== "Escape") return;
       if (ocrPanel) { setOcrPanel(null); return; }
-      if (selectionPopupVisible) { setRefineMinimized(true); return; }
+      if (selectionPopupVisible) { clearRefineSession(); return; }
       if (bubbleHovered && mode === "bubble") { setBubbleHovered(false); return; }
       if (mode === "picking") { cancelPicking(); return; }
       if (mode === "panel" && !minimized) { setMinimized(true); return; }
@@ -692,9 +664,9 @@ export default function App() {
     // Peek is active (SelectionPopup is rendered as a sibling regardless of
     // `mode`). A mousedown reaching here (not stopped by the popup/pill's
     // own data-peek-ui wrapper) landed outside them.
-    // Click outside the Refine popup minimizes it; only starting a new flow
-    // or explicit Close clears the session (see replaceActiveSession / onClear).
-    if (selectionPopupVisible) { setRefineMinimized(true); return; }
+    // Click outside the Refine popup closes it; only starting a new flow
+    // or explicit Close clears via the same path (clearRefineSession).
+    if (selectionPopupVisible) { clearRefineSession(); return; }
     if (pendingSelectionPos) { setPendingSelectionPos(null); return; }
     if (mode === "picking") {
       draggingRef.current = true;
@@ -744,8 +716,8 @@ export default function App() {
       const { moved } = bubbleDragRef.current;
       bubbleDragRef.current = null;
       if (!moved) {
-        if ((mode === "panel" && minimized) || refineMinimized) {
-          restoreMinimizedSession();
+        if (mode === "panel" && minimized) {
+          restoreMinimizedPanel();
         } else {
           setBubbleHovered(false);
         }
@@ -808,15 +780,16 @@ export default function App() {
     : "50%"; // free circle only while mid-drag, before it snaps back to an edge
   // The mode strip (Image/Text/Voice) slides out on bubble hover only.
   const showStrip = bubbleShown && bubbleHovered;
-  const activeChat = refineMinimized && refineSessionActive
-    ? { kind: "refine", busy: refineBusy, ready: refineReady }
-    : mode === "panel" && minimized
+  const activeChat = mode === "panel" && minimized
     ? { kind: "panel", busy: panelBusy, ready: answerReady }
     : null;
   const activeCrop = cropHistory[activeCropIndex] || cropHistory[cropHistory.length - 1] || null;
   const showFrozenCrop = showFrame && !!activeCrop;
   const pickingFocusRect = mode === "picking" && isDragging && drag && drag.w >= MIN_DRAG
     ? { x: drag.x, y: drag.y, width: drag.w, height: drag.h }
+    : null;
+  const pendingPillPos = pendingSelectionPos
+    ? anchorRefineUi(pendingSelectionPos, REFINE_UI_SIZES.pill)
     : null;
 
   return (
@@ -939,10 +912,10 @@ export default function App() {
         </>
       )}
 
-      {!selectedText && pendingSelectionPos && (
+      {!selectedText && pendingPillPos && (
         // Appears on selection gesture; disappears if nothing was copied.
         <div data-peek-ui="true" style={{
-          position: "fixed", left: pendingSelectionPos.x, top: pendingSelectionPos.y + 12, zIndex: 50,
+          position: "fixed", left: pendingPillPos.left, top: pendingPillPos.top, zIndex: 50,
         }}>
           <button
             onMouseDown={(e) => e.stopPropagation()}
@@ -958,16 +931,21 @@ export default function App() {
           </button>
         </div>
       )}
-      {grabError && (
-        <div style={{
-          position: "fixed", left: grabError.pos?.x ?? 0, top: (grabError.pos?.y ?? 0) + 12, zIndex: 50,
-          display: "flex", alignItems: "center", gap: 6, padding: "7px 13px", borderRadius: 999,
-          background: "rgba(120,20,20,0.92)", color: "#fff", fontSize: 12, fontWeight: 600,
-          pointerEvents: "none", whiteSpace: "nowrap", boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
-        }}>
-          {grabError.message}
-        </div>
-      )}
+      {grabError && (() => {
+        const errPos = grabError.pos
+          ? anchorRefineUi(grabError.pos, { width: 220, height: 36 })
+          : { left: 8, top: 8 };
+        return (
+          <div style={{
+            position: "fixed", left: errPos.left, top: errPos.top, zIndex: 50,
+            display: "flex", alignItems: "center", gap: 6, padding: "7px 13px", borderRadius: 999,
+            background: "rgba(120,20,20,0.92)", color: "#fff", fontSize: 12, fontWeight: 600,
+            pointerEvents: "none", whiteSpace: "nowrap", boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
+          }}>
+            {grabError.message}
+          </div>
+        );
+      })()}
       {ocrPanelOpen && (
         <ImageOcrPanel
           busy={!!ocrPanel?.busy}
@@ -981,12 +959,7 @@ export default function App() {
           key={refineKey}
           selectedText={selectedText}
           selectionPos={selectionPos}
-          refineContext={refineContext}
-          minimized={refineMinimized}
-          onMinimize={() => setRefineMinimized(true)}
           onClear={clearRefineSession}
-          onBusyChange={setRefineBusy}
-          onAnswerReady={handleRefineAnswerReady}
         />
       )}
 
@@ -1006,7 +979,7 @@ export default function App() {
           activeChat={activeChat}
           menuOpen={showStrip}
           view={menuView}
-          onOpenChat={restoreMinimizedSession}
+          onOpenChat={restoreMinimizedPanel}
           onBack={() => setMenuView("root")}
           onImage={chooseImage}
           onVoice={chooseVoice}
