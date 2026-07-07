@@ -1,5 +1,6 @@
 import {
-  IconCheck, IconWand, IconZap, IconCondense, IconShuffle, IconBulb, IconAlignLines,
+  IconCheck, IconWand, IconCondense, IconShuffle, IconBulb, IconAlignLines,
+  IconListTab, IconSparkle,
 } from "./Icons.jsx";
 
 /** @typedef {{ key: string, label: string, icon: import('react').ComponentType, instruction: string }} RefineAction */
@@ -15,8 +16,12 @@ const BASIC_ACTIONS = [
     instruction: "Improve for clarity and flow while keeping the original meaning and tone.",
   },
   {
-    key: "punchier", label: "Make it punchier", icon: IconZap,
-    instruction: "Make punchier and more direct while keeping the same meaning.",
+    key: "summarize", label: "Summarize", icon: IconListTab,
+    instruction: "Summarize the key points concisely in clear prose.",
+  },
+  {
+    key: "explain", label: "Explain", icon: IconSparkle,
+    instruction: "Explain this more clearly and simply, as if helping someone understand it for the first time.",
   },
   {
     key: "condense", label: "Condense", icon: IconCondense,
