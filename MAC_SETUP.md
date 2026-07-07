@@ -69,7 +69,9 @@ Quick mode shortcuts (global):
 - **Image mode:** **⌘ + ⌥ + I** — capture and select a region
 - **Text mode:** **⌘ + ⌥ + T** — open the text composer
 
-**Pause without hiding:** click the bubble tab (or press the toggle hotkey again) to put Peek in a **grayscale dormant** state — the tab stays on screen but refine, capture, and menus are off so it won't interfere with your work. Click the gray tab to wake it up again.
+**Pause without hiding:** click the bubble tab to put Peek in a **grayscale dormant** state — the tab stays on screen but refine, capture, and menus are off so it won't interfere with your work. Click the gray tab to wake it up again.
+
+**Close Peek:** press the toggle hotkey, or the **×** on the bubble — both fully hide it. Press the hotkey again to bring it back.
 
 Check the menu bar icon if a combo is already taken by another app.
 

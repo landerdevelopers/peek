@@ -1021,7 +1021,7 @@ export default function App() {
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
           onMouseEnter={() => openHover()}
           onMouseLeave={closeHoverSoon}
-          title={armed ? "Drag or click to pause Peek" : "Click to activate Peek"}
+          title={armed ? "Click to pause · × to close Peek" : "Click to activate Peek"}
           style={{
             position: "fixed", left: bubbleLeft, top: bubblePos.y, width: bubbleWidth, height: BUBBLE_SIZE,
             borderRadius: bubbleRadius, background: armed ? "#fff" : "#ECECEC",
@@ -1049,8 +1049,9 @@ export default function App() {
           {armed && bubbleHovered && (
           <button
             className="peek-fade-in"
+            title="Close Peek"
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); standDownRef.current?.(); }}
+            onClick={(e) => { e.stopPropagation(); window.peekDesktop.deactivate?.(); }}
             style={{
               // Anchored on the inner (screen-facing) top corner so it never
               // lands off-screen past the edge the bubble is docked flush to.

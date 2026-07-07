@@ -516,13 +516,6 @@ function deactivatePeek() {
 // is false — renderer syncs via peek:set-armed.
 let peekArmed = false;
 
-function standDownPeek() {
-  if (!overlayWin || overlayWin.isDestroyed()) return;
-  peekArmed = false;
-  closeAll();
-  overlayWin.webContents.send("peek:stand-down");
-}
-
 function armPeekOverlay() {
   if (!overlayWin || overlayWin.isDestroyed()) return;
   if (!overlayWin.isVisible()) {
@@ -535,13 +528,13 @@ function armPeekOverlay() {
   overlayWin.webContents.send("peek:arm");
 }
 
+// The hotkey is a hard on/off: fully closes Peek (hides the bubble) whenever
+// it's on screen — armed OR dormant — and brings it back armed when hidden.
+// Pausing to the dormant grayscale tab is only reachable by clicking the
+// bubble itself (renderer's standDown).
 function onHotkeyPressed() {
-  if (!overlayWin?.isVisible()) {
-    activatePeek();
-    return;
-  }
-  if (peekArmed) standDownPeek();
-  else armPeekOverlay();
+  if (overlayWin?.isVisible()) deactivatePeek();
+  else activatePeek();
 }
 
 function onImageHotkeyPressed() {
