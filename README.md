@@ -20,6 +20,8 @@ npm run desktop:dev
 
 Requires the `claude` CLI (and/or `codex` CLI) installed and logged in.
 
+**Mac (first time):** see [MAC_SETUP.md](./MAC_SETUP.md) for a copy-paste setup guide.
+
 ## Use it
 
 - Press the hotkey (default `Ctrl+Alt+A`, falls back automatically to another
