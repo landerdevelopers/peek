@@ -63,7 +63,14 @@ You should see:
 - A **Peek dashboard** window
 - A **menu bar icon** (top-right, near Wi‑Fi/battery)
 
-Default hotkey on Mac: **⌘ + ⌥ + A** (Command + Option + A).
+Main gesture: **double-tap ⌘** (Command) on Mac, **double-tap Ctrl** on Windows — opens the chat bar instantly, from anywhere. Double-tap again to close it. This is fixed and never clashes with another app's shortcut.
+
+Once the chat bar is open, use the little **Text / Screenshot / Voice** switch on its left to jump between input modes without going back to the bubble. You can also cycle modes with **Ctrl + ← / →**.
+
+How each mode behaves:
+- **Text:** the chat bar acts like a modal — it stays up while you work and only **minimizes when it loses focus** (click it to bring it back).
+- **Screenshot:** opens as a normal chat modal (no dimmed capture screen). **Drag anywhere on the surface** to grab a region — the surface only dims **while you're dragging**. Let go and Peek captures that area and slides the chat box next to it to answer about it. A plain click outside the box just minimizes it, same as text.
+- **Voice:** a compact floating box replaces the chat bar. **Hold Ctrl to talk** (or press-and-hold the mic button), and your words stream in as **live transcription**. **Release** to send what you said as the query — the answer shows right in the box. No typing, no thread.
 
 Quick mode shortcuts (global):
 - **Image mode:** **⌘ + ⌥ + I** — capture and select a region
@@ -71,9 +78,9 @@ Quick mode shortcuts (global):
 
 **Pause without hiding:** click the bubble tab to put Peek in a **grayscale dormant** state — the tab stays on screen but refine, capture, and menus are off so it won't interfere with your work. Click the gray tab to wake it up again.
 
-**Close Peek:** press the toggle hotkey, or the **×** on the bubble — both fully hide it. Press the hotkey again to bring it back.
+**Close Peek:** double-tap the modifier again, or click the **×** on the bubble — both fully hide it.
 
-Check the menu bar icon if a combo is already taken by another app.
+Note: the double-tap gesture needs Accessibility permission (below), same as text selection.
 
 ---
 

@@ -5,6 +5,9 @@ const fs = require("node:fs");
 const backend = require("./backend.cjs");
 const voiceTranscribe = require("./voiceTranscribe.cjs");
 const cliDetect = require("./cliDetect.cjs");
+const secrets = require("./secrets.cjs");
+const apiBackends = require("./apiBackends.cjs");
+const backendRegistry = require("./backendRegistry.cjs");
 const store = require("./store.cjs");
 const platform = require("./platform/index.cjs");
 const micAccess = require("./platform/micAccess.cjs");
@@ -294,19 +297,75 @@ async function captureScreen() {
   try {
     const display = screen.getPrimaryDisplay();
     const scaleFactor = display.scaleFactor || 1;
-    const physW = Math.round(display.size.width * scaleFactor);
-    const physH = Math.round(display.size.height * scaleFactor);
+    const { bounds, workArea } = display;
+    const physW = Math.round(bounds.width * scaleFactor);
+    const physH = Math.round(bounds.height * scaleFactor);
     const shrink = Math.min(1, CAPTURE_MAX / Math.max(physW, physH));
     const tw = Math.max(1, Math.round(physW * shrink));
     const th = Math.max(1, Math.round(physH * shrink));
     const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: tw, height: th } });
     const src = sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
-    if (src && !src.thumbnail.isEmpty()) lastCapture = { image: src.thumbnail, width: tw, height: th };
+    if (src && !src.thumbnail.isEmpty()) {
+      let image = src.thumbnail;
+      let width = tw, height = th;
+      // desktopCapturer grabs the *whole* display, but Peek's picker overlay
+      // only covers the work area (screen minus the taskbar/dock). Crop the
+      // grab down to that same region so the picker's drag coordinates line up
+      // 1:1 with the captured pixels — otherwise what you select and what
+      // actually gets cropped drift apart (badly so with a top/side taskbar,
+      // where the whole capture is offset by the taskbar's thickness).
+      const offX = Math.round((workArea.x - bounds.x) * scaleFactor * shrink);
+      const offY = Math.round((workArea.y - bounds.y) * scaleFactor * shrink);
+      const waW = Math.round(workArea.width * scaleFactor * shrink);
+      const waH = Math.round(workArea.height * scaleFactor * shrink);
+      if ((offX > 0 || offY > 0 || waW < tw || waH < th) && waW > 0 && waH > 0) {
+        const cx = Math.max(0, Math.min(tw - 1, offX));
+        const cy = Math.max(0, Math.min(th - 1, offY));
+        const cw = Math.max(1, Math.min(tw - cx, waW));
+        const ch = Math.max(1, Math.min(th - cy, waH));
+        image = image.crop({ x: cx, y: cy, width: cw, height: ch });
+        width = cw; height = ch;
+      }
+      lastCapture = { image, width, height };
+    }
   } catch {
     lastCapture = null;
   }
   if (!lastCapture) return null;
-  return { dataUrl: lastCapture.image.toDataURL(), width: lastCapture.width, height: lastCapture.height };
+  const size = lastCapture.image.getSize();
+  return { dataUrl: lastCapture.image.toDataURL(), width: size.width, height: size.height };
+}
+
+// Silent full-screen grab saved to a throwaway temp PNG — used as INVISIBLE
+// context for a text-mode question so the model can ground answers in what's on
+// screen. Never shown to the user and never saved to the session. Content-
+// protected so Peek's own chat bar is excluded from the shot (see capture-silent).
+// Standalone (doesn't touch lastCapture/capturedPath) so it can't disturb an
+// image-mode crop session. Returns the temp path, or null on any failure.
+async function captureContextPng() {
+  if (!overlayWin || overlayWin.isDestroyed()) return null;
+  try {
+    overlayWin.setContentProtection(true);
+    await new Promise((r) => setTimeout(r, 45));
+    const display = screen.getPrimaryDisplay();
+    const sf = display.scaleFactor || 1;
+    const { bounds } = display;
+    const w = Math.round(bounds.width * sf);
+    const h = Math.round(bounds.height * sf);
+    const shrink = Math.min(1, CAPTURE_MAX / Math.max(w, h));
+    const tw = Math.max(1, Math.round(w * shrink));
+    const th = Math.max(1, Math.round(h * shrink));
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: tw, height: th } });
+    const src = sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
+    if (!src || src.thumbnail.isEmpty()) return null;
+    const p = path.join(os.tmpdir(), `peek-ctx-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`);
+    fs.writeFileSync(p, src.thumbnail.toPNG());
+    return p;
+  } catch {
+    return null;
+  } finally {
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setContentProtection(false);
+  }
 }
 
 
@@ -451,6 +510,82 @@ function onSelectionKeyUp(e) {
   noteSelectionPending(x, y);
 }
 
+// uIOhook is a single global hook shared by two features: the always-on
+// double-tap hotkey detector (started at launch, runs for the app's whole
+// life) and the selection-grab listeners (added only while Peek is armed).
+// Whoever needs it first calls uIOhook.start(); it's stopped once, on quit.
+let uiohookRunning = false;
+function ensureUiohookRunning() {
+  if (uiohookRunning) return;
+  try {
+    uIOhook.start();
+    uiohookRunning = true;
+  } catch (err) {
+    if (platform.isMac) {
+      console.warn("[peek] Global hook failed — grant Accessibility permission in System Settings → Privacy & Security → Accessibility.");
+    }
+    console.warn("[peek] uIOhook.start failed:", err?.message || err);
+  }
+}
+function stopUiohook() {
+  if (!uiohookRunning) return;
+  uiohookRunning = false;
+  try { uIOhook.stop(); } catch {}
+}
+
+// --- Double-tap modifier hotkey (Ctrl+Ctrl / ⌘+⌘) -------------------------
+// Electron's globalShortcut can't bind a bare modifier, so we detect the
+// gesture off the raw global key stream: two clean, quick taps of the
+// primary modifier with no other key pressed in between (so Ctrl+C etc.
+// never counts). The primary modifier is Ctrl on Windows, ⌘ on macOS.
+const HOTKEY_TAP_MAX_HOLD = 400; // ms — a "tap" must be released quickly
+const HOTKEY_TAP_GAP = 400;      // ms — max time between the two taps
+const hotkeyModKeys = platform.hotkeyModifierKeycodes();
+let hotkeyHookActive = false;
+let modDownAt = 0;      // when the modifier last went down (0 = up)
+let modDirty = false;   // another key was pressed during this hold
+let lastCleanTapAt = 0; // when the previous clean tap completed
+// Voice mode owns the Ctrl key (push-to-talk), so the double-tap toggle is
+// paused while it's open — otherwise tapping Ctrl to talk gets misread as the
+// activation gesture and flips Peek off / surfaces the dashboard behind it.
+let hotkeySuppressed = false;
+
+function onHotkeyKeyDown(e) {
+  if (hotkeyModKeys.has(e.keycode)) {
+    if (modDownAt === 0) { modDownAt = Date.now(); modDirty = false; } // ignore auto-repeat
+  } else {
+    if (modDownAt !== 0) modDirty = true; // modifier is being used in a combo
+    lastCleanTapAt = 0;                    // any other key breaks the sequence
+  }
+}
+
+function onHotkeyKeyUp(e) {
+  if (!hotkeyModKeys.has(e.keycode)) return;
+  const downAt = modDownAt;
+  const dirty = modDirty;
+  modDownAt = 0;
+  modDirty = false;
+  if (hotkeySuppressed) { lastCleanTapAt = 0; return; }
+  if (downAt === 0) return;
+  const held = Date.now() - downAt;
+  if (dirty || held > HOTKEY_TAP_MAX_HOLD) { lastCleanTapAt = 0; return; }
+  const now = Date.now();
+  if (lastCleanTapAt && now - lastCleanTapAt <= HOTKEY_TAP_GAP) {
+    lastCleanTapAt = 0;
+    onHotkeyPressed();
+  } else {
+    lastCleanTapAt = now;
+  }
+}
+
+function startHotkeyHook() {
+  if (hotkeyHookActive) return;
+  hotkeyHookActive = true;
+  uIOhook.on("keydown", onHotkeyKeyDown);
+  uIOhook.on("keyup", onHotkeyKeyUp);
+  ensureUiohookRunning();
+}
+
 function startSelectionHook() {
   if (selectionHookActive) return;
   selectionHookActive = true;
@@ -458,14 +593,7 @@ function startSelectionHook() {
   uIOhook.on("mousedown", onSelectionMouseDown);
   uIOhook.on("mouseup", onSelectionMouseUp);
   uIOhook.on("keyup", onSelectionKeyUp);
-  try {
-    uIOhook.start();
-  } catch (err) {
-    if (platform.isMac) {
-      console.warn("[peek] Selection hook failed — grant Accessibility permission in System Settings → Privacy & Security → Accessibility.");
-    }
-    console.warn("[peek] uIOhook.start failed:", err?.message || err);
-  }
+  ensureUiohookRunning();
 }
 
 function stopSelectionHook() {
@@ -474,7 +602,7 @@ function stopSelectionHook() {
   uIOhook.removeListener("mousedown", onSelectionMouseDown);
   uIOhook.removeListener("mouseup", onSelectionMouseUp);
   uIOhook.removeListener("keyup", onSelectionKeyUp);
-  try { uIOhook.stop(); } catch {}
+  // Leave uIOhook itself running — the double-tap hotkey detector needs it.
   selectionMouseDown = null;
   selectionSourceHandle = null;
   pendingSelection = null;
@@ -528,13 +656,15 @@ function armPeekOverlay() {
   overlayWin.webContents.send("peek:arm");
 }
 
-// The hotkey is a hard on/off: fully closes Peek (hides the bubble) whenever
-// it's on screen — armed OR dormant — and brings it back armed when hidden.
-// Pausing to the dormant grayscale tab is only reachable by clicking the
-// bubble itself (renderer's standDown).
+// The double-tap hotkey is a hard on/off that opens the chat bar directly:
+// when Peek is hidden it activates and drops you straight into the text
+// composer (from there the in-panel switch jumps to image/voice); when it's
+// already on screen the same gesture closes it. Pausing to the dormant
+// grayscale tab is only reachable by clicking the bubble (renderer standDown).
 function onHotkeyPressed() {
-  if (overlayWin?.isVisible()) deactivatePeek();
-  else activatePeek();
+  if (overlayWin?.isVisible()) { deactivatePeek(); return; }
+  activatePeek();
+  overlayWin?.webContents.send("peek:open-text");
 }
 
 function onImageHotkeyPressed() {
@@ -618,6 +748,27 @@ ipcMain.handle("peek:select", (_e, sel) => {
 // reported as a real blur — otherwise an already-open panel (its blur
 // listener now live for every mode, not just image/voice) would
 // auto-minimize itself the instant you switch its own mode tab into Image.
+// Blink-free capture for image mode. Rather than hide the window, or have the
+// renderer fade its whole overlay to transparent for the shot (which flashed on
+// every image-mode entry / text→image switch), we exclude Peek's own window
+// from the grab at the OS level — Windows WDA_EXCLUDEFROMCAPTURE via
+// setContentProtection, the macOS equivalent on Mac. The chat bar stays fully
+// visible to the user the entire time; desktopCapturer simply omits this window
+// and records the desktop behind it, so switching into Image mode is seamless.
+ipcMain.handle("peek:capture-silent", async () => {
+  if (!overlayWin || overlayWin.isDestroyed()) return null;
+  try {
+    overlayWin.setContentProtection(true);
+    // Give the compositor a frame or two to apply the capture-exclusion before
+    // the desktopCapturer frame is grabbed — otherwise the grab can race the
+    // affinity change and still include the (now-visible) chat bar.
+    await new Promise((r) => setTimeout(r, 45));
+    return await captureScreen();
+  } finally {
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setContentProtection(false);
+  }
+});
+
 ipcMain.handle("peek:capture-now", async () => {
   if (!overlayWin) return null;
   const wasVisible = overlayWin.isVisible();
@@ -735,14 +886,25 @@ ipcMain.handle("peek:pick-image", async (e) => {
 ipcMain.handle("peek:ask", async (_e, payload = {}) => {
   const {
     imagePath, question, history = [], backend: which = "claude",
-    sessionId, thumbDataUrl, mode, refineInstruction, selectedText,
+    sessionId, thumbDataUrl, mode, refineInstruction, selectedText, model, screenContext,
   } = payload;
   if (!String(question || refineInstruction || "").trim()) return { error: "missing question" };
+  // Text mode silently attaches a fresh screenshot as optional context so the
+  // model can ground answers in what's on screen. The shot is used only for this
+  // one answer — it's NOT shown to the user and NOT persisted to the session
+  // (createSession below keeps the original, null imagePath). screenContext also
+  // flips the system prompt to "use it only if relevant" (messageBuilder).
+  let contextPath = null;
   try {
+    let askImagePath = imagePath;
+    if (screenContext && !imagePath) {
+      contextPath = await captureContextPng();
+      askImagePath = contextPath || undefined;
+    }
     const text = await backend.ask({
-      backend: which, imagePath,
+      backend: which, imagePath: askImagePath,
       question: String(question || "").trim(),
-      history, mode, refineInstruction, selectedText,
+      history, mode, refineInstruction, selectedText, model, screenContext,
     });
     let sid = sessionId;
     if (!sid) sid = store.createSession({ backend: which, imagePath, thumbDataUrl }).id;
@@ -750,10 +912,13 @@ ipcMain.handle("peek:ask", async (_e, payload = {}) => {
     return { text, sessionId: sid };
   } catch (e) {
     return { error: String(e.message || e) };
+  } finally {
+    if (contextPath) { try { fs.unlinkSync(contextPath); } catch {} }
   }
 });
 
-ipcMain.handle("peek:submit-hotkey", (_e, accel) => rebindHotkey(String(accel || "")));
+// The main hotkey is a fixed double-tap gesture now — not rebindable.
+ipcMain.handle("peek:submit-hotkey", () => ({ error: "The main shortcut is a fixed double-tap and can't be changed." }));
 ipcMain.handle("peek:hotkey:get", () => hotkeyAccel);
 ipcMain.handle("peek:hotkeys:get", () => ({
   main: hotkeyAccel,
@@ -791,6 +956,15 @@ ipcMain.handle("peek:sessions:rename", (_e, id, title) => {
 ipcMain.handle("peek:clipboard-write", (_e, text) => { clipboard.writeText(String(text || "")); return { ok: true }; });
 
 ipcMain.handle("peek:ensure-mic-access", async () => {
+  // Only macOS shows a system permission sheet that sits *under* the always-on-top
+  // overlay and needs it hidden. On Windows/Linux the mic permission is handled
+  // inline by Chromium (ensureMicrophoneAccess returns immediately), so suspending
+  // the overlay would just yank the voice card away and steal focus to the
+  // dashboard the instant you start talking — which broke push-to-talk capture
+  // (the hold/Ctrl keyup/mouseup never lands on the vanished card).
+  if (process.platform !== "darwin") {
+    return micAccess.ensureMicrophoneAccess();
+  }
   const resume = suspendOverlayForSystemUI();
   try {
     return await micAccess.ensureMicrophoneAccess();
@@ -884,6 +1058,22 @@ ipcMain.handle("peek:platform-info", () => ({
 
 ipcMain.handle("peek:backends:list", (_e, opts) => cliDetect.listBackends(opts || {}));
 
+// BYO API keys — set/clear/status only; a plaintext key is written to main via
+// peek:keys:set and never read back out (there is deliberately no get-plaintext
+// handler). backend.cjs reads keys directly from secrets.cjs at request time.
+ipcMain.handle("peek:keys:set", (_e, { vendor, key } = {}) => {
+  if (!backendRegistry.KEY_VENDORS.includes(vendor)) return { error: "unknown vendor" };
+  try { return secrets.set(vendor, key); } catch (e) { return { error: String(e.message || e) }; }
+});
+ipcMain.handle("peek:keys:clear", (_e, { vendor } = {}) => {
+  if (!backendRegistry.KEY_VENDORS.includes(vendor)) return { error: "unknown vendor" };
+  try { return secrets.clear(vendor); } catch (e) { return { error: String(e.message || e) }; }
+});
+ipcMain.handle("peek:keys:status", () => {
+  try { return secrets.status(backendRegistry.KEY_VENDORS); } catch (e) { return { error: String(e.message || e) }; }
+});
+ipcMain.handle("peek:ollama:models", () => apiBackends.probeOllama());
+
 ipcMain.handle("peek:login-item:get", () => app.getLoginItemSettings().openAtLogin);
 ipcMain.handle("peek:login-item:set", (_e, on) => {
   setLoginItem(!!on);
@@ -915,6 +1105,8 @@ ipcMain.on("peek:set-armed", (_e, armed) => {
   else closeAll();
 });
 ipcMain.on("peek:open-dashboard", () => showDashboard());
+ipcMain.on("peek:hotkey-suppress", (_e, on) => { hotkeySuppressed = !!on; if (on) lastCleanTapAt = 0; });
+ipcMain.on("peek:chat-minimized", (_e, on) => setRestoreShortcut(!!on));
 ipcMain.on("peek:set-clickthrough", (_e, on) => { overlayWin?.setIgnoreMouseEvents(!!on, { forward: true }); });
 ipcMain.on("peek:quit", () => app.quit());
 ipcMain.on("peek:notify", (_e, { title, body } = {}) => {
@@ -946,12 +1138,41 @@ function bindShortcut(accelerators, handler) {
   return null;
 }
 
+// A minimized chat can't be reopened from the renderer's own key listener: once
+// tucked away the overlay no longer holds OS keyboard focus, so Ctrl/⌘+↑ never
+// reaches it (it only worked right after Ctrl+↓, before focus was lost). We bind
+// a real global shortcut for the reopen instead — but only WHILE a chat is
+// minimized, so Ctrl/⌘+↑ stays free for every other app the rest of the time.
+let restoreShortcutAccel = null;
+function onRestoreChatShortcut() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  // Just ask the renderer to un-minimize. The overlay is already on screen (the
+  // bubble is showing while minimized), so we deliberately DON'T touch focus or
+  // mouse-capture here: forcing setIgnoreMouseEvents(false) on a keyboard-driven
+  // restore (mouse hasn't moved) leaves the full-screen overlay eating every
+  // click, because the renderer's per-pixel refresh has no fresh cursor position
+  // to correct it — which froze clicks and blocked auto-minimize. The renderer
+  // reconciles click-through itself once the pointer moves.
+  overlayWin.webContents.send("peek:restore-panel");
+}
+function setRestoreShortcut(on) {
+  if (on) {
+    if (restoreShortcutAccel) return;
+    restoreShortcutAccel = bindShortcut(["CommandOrControl+Up"], onRestoreChatShortcut);
+  } else if (restoreShortcutAccel) {
+    try { globalShortcut.unregister(restoreShortcutAccel); } catch {}
+    restoreShortcutAccel = null;
+  }
+}
+
 function registerShortcut() {
   const cfg = loadConfig();
-  const candidates = cfg.hotkey ? [cfg.hotkey, ...DEFAULT_HOTKEY_CANDIDATES] : DEFAULT_HOTKEY_CANDIDATES;
-  hotkeyAccel = bindShortcut(candidates, onHotkeyPressed);
-  // Sticky: remember whichever combo actually worked, so next launch tries it first.
-  if (hotkeyAccel) saveConfig({ hotkey: hotkeyAccel });
+  // The main "open Peek" hotkey is a fixed double-tap of the primary modifier
+  // (Ctrl / ⌘) handled by the always-on uIOhook detector — not a globalShortcut
+  // combo — so there's nothing to bind here and it can never clash with another
+  // app's shortcut. hotkeyAccel is just the label shown in the tray/Settings.
+  hotkeyAccel = platform.hotkeyLabel();
+  startHotkeyHook();
 
   const imageCandidates = cfg.imageHotkey
     ? [cfg.imageHotkey, ...platform.defaultImageHotkeyCandidates()]
@@ -963,30 +1184,6 @@ function registerShortcut() {
   textHotkeyAccel = bindShortcut(textCandidates, onTextHotkeyPressed);
   if (imageHotkeyAccel) saveConfig({ imageHotkey: imageHotkeyAccel });
   if (textHotkeyAccel) saveConfig({ textHotkey: textHotkeyAccel });
-
-  if (!hotkeyAccel && Notification.isSupported()) {
-    new Notification({
-      title: "Peek — no hotkey available",
-      body: "Every combo tried was already taken by something else. Use the tray icon, or set your own via \"Change hotkey…\".",
-    }).show();
-  }
-}
-
-/** Swap the bound hotkey at runtime; rolls back if the new combo is taken. */
-function rebindHotkey(newAccel) {
-  if (!newAccel) return { error: "no combo captured" };
-  const prev = hotkeyAccel;
-  if (prev) { try { globalShortcut.unregister(prev); } catch {} }
-  let ok = false;
-  try { ok = globalShortcut.register(newAccel, onHotkeyPressed) && globalShortcut.isRegistered(newAccel); } catch { ok = false; }
-  if (ok) {
-    hotkeyAccel = newAccel;
-    saveConfig({ hotkey: newAccel });
-    refreshTray();
-    return { ok: true, accel: newAccel };
-  }
-  if (prev) { try { globalShortcut.register(prev, onHotkeyPressed); } catch {} } // roll back — never leave the user with nothing bound
-  return { error: `${newAccel} is already in use by another app` };
 }
 
 const fmtAccel = (acc) => platform.formatAccelerator(acc);
@@ -1010,10 +1207,9 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: "Open Peek", click: () => showDashboard() },
     { type: "separator" },
-    { label: `Ask about screen  (${fmtAccel(hotkeyAccel)})`, click: () => onHotkeyPressed() },
+    { label: `Open chat  (${hotkeyAccel})`, click: () => onHotkeyPressed() },
     { label: `Image mode  (${fmtAccel(imageHotkeyAccel)})`, click: () => onImageHotkeyPressed() },
     { label: `Text mode  (${fmtAccel(textHotkeyAccel)})`, click: () => onTextHotkeyPressed() },
-    { label: "Change hotkey…", click: () => startRecording() },
     { label: "Close panel", click: () => deactivatePeek() },
     { type: "separator" },
     {
@@ -1076,6 +1272,7 @@ if (!gotLock) {
   app.on("before-quit", () => { isQuitting = true; });
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
+    stopUiohook();
     cleanupCapture();
   });
 }

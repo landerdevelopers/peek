@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("peekDesktop", {
   saveScreenshot: (imagePath) => ipcRenderer.invoke("peek:save-screenshot", { imagePath }),
   exportText: (payload) => ipcRenderer.invoke("peek:export-text", payload),
   captureNow: () => ipcRenderer.invoke("peek:capture-now"),
+  captureSilent: () => ipcRenderer.invoke("peek:capture-silent"),
   grabSelection: () => ipcRenderer.invoke("peek:grab-selection"),
   copyToClipboard: (text) => ipcRenderer.invoke("peek:clipboard-write", text),
   ensureMicAccess: () => ipcRenderer.invoke("peek:ensure-mic-access"),
@@ -27,6 +28,11 @@ contextBridge.exposeInMainWorld("peekDesktop", {
   replaceSelection: (text) => ipcRenderer.invoke("peek:replace-selection", text),
   notifyPanelExpanded: (armed) => ipcRenderer.send("peek:set-armed", armed),
   setArmed: (armed) => ipcRenderer.send("peek:set-armed", armed),
+  suppressHotkey: (on) => ipcRenderer.send("peek:hotkey-suppress", on),
+  // Tells main whether a chat is currently minimized, so it can (de)register the
+  // global Ctrl/⌘+↑ restore shortcut — the overlay loses keyboard focus once
+  // minimized, so an in-page key listener alone can't catch the reopen.
+  setChatMinimized: (on) => ipcRenderer.send("peek:chat-minimized", on),
   endSession: () => ipcRenderer.send("peek:end-session"),
   deactivate: () => ipcRenderer.send("peek:deactivate-request"),
   openDashboard: () => ipcRenderer.send("peek:open-dashboard"),
@@ -37,6 +43,15 @@ contextBridge.exposeInMainWorld("peekDesktop", {
   getHotkeys: () => ipcRenderer.invoke("peek:hotkeys:get"),
   getPlatformInfo: () => ipcRenderer.invoke("peek:platform-info"),
   listBackends: (opts) => ipcRenderer.invoke("peek:backends:list", opts),
+  // BYO API keys — status/set/clear only; the raw key never crosses back.
+  keys: {
+    status: () => ipcRenderer.invoke("peek:keys:status"),
+    set: (vendor, key) => ipcRenderer.invoke("peek:keys:set", { vendor, key }),
+    clear: (vendor) => ipcRenderer.invoke("peek:keys:clear", { vendor }),
+  },
+  ollama: {
+    models: () => ipcRenderer.invoke("peek:ollama:models"),
+  },
   whoami: () => ipcRenderer.invoke("peek:whoami"),
   sessions: {
     list: () => ipcRenderer.invoke("peek:sessions:list"),

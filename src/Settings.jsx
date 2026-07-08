@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { LIGHT } from "./theme.js";
 import { buildAccelerator } from "./hotkeyUtils.js";
 import { fmtAccel, loadPlatformInfo, modifierChips } from "./accelFormat.js";
-import { IconClose, IconSettings, IconKeyboard } from "./Icons.jsx";
+import { IconClose, IconSettings, IconKeyboard, IconSparkle } from "./Icons.jsx";
 import BackendPicker from "./BackendPicker.jsx";
+import BackendManager from "./BackendManager.jsx";
 import { BACKEND_KEY, resolveBackend } from "./backends.js";
 import { useInstalledBackends } from "./useInstalledBackends.js";
 
@@ -11,6 +12,7 @@ const fmtAccelDisplay = (acc) => fmtAccel(acc) || "unavailable";
 
 const NAV = [
   { key: "general", label: "General", icon: IconSettings },
+  { key: "providers", label: "Backends", icon: IconSparkle },
   { key: "hotkey", label: "Hotkey", icon: IconKeyboard },
 ];
 
@@ -157,28 +159,19 @@ export default function Settings({ onClose }) {
             </>
           )}
 
+          {section === "providers" && (
+            <div style={{ paddingBottom: 16 }}>
+              <BackendManager />
+            </div>
+          )}
+
           {section === "hotkey" && (
             <>
-              <SettingRow title="Toggle Peek" desc="Show or hide Peek from anywhere.">
-                {!recording ? (
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{
-                      fontSize: 13, fontWeight: 600, color: LIGHT.text, background: LIGHT.surface,
-                      border: `1px solid ${LIGHT.border}`, borderRadius: 6, padding: "6px 10px",
-                    }}>{fmtAccelDisplay(hotkey)}</span>
-                    <button onClick={() => setRecording(true)} style={btnStyle()}>Change</button>
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      {modifierChips().map(({ key, label }) => chip(label, held[key]))}
-                    </div>
-                    <span style={{ color: LIGHT.muted, fontSize: 11.5 }}>+ a key · Esc to cancel</span>
-                    {status && (
-                      <div style={{ fontSize: 12.5, color: status.kind === "ok" ? "#3E8A5C" : "#C4522F" }}>{status.text}</div>
-                    )}
-                  </div>
-                )}
+              <SettingRow title="Open Peek" desc="Double-tap to open the chat bar from anywhere.">
+                <span style={{
+                  fontSize: 13, fontWeight: 600, color: LIGHT.text, background: LIGHT.surface,
+                  border: `1px solid ${LIGHT.border}`, borderRadius: 6, padding: "6px 10px",
+                }}>{fmtAccelDisplay(hotkey)}</span>
               </SettingRow>
 
               <SettingRow title="Image mode" desc="Jump straight into screenshot capture.">

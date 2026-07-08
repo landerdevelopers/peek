@@ -227,6 +227,18 @@ export function useVoiceInput(input, setInput) {
     }
   };
 
+  // Push-to-talk stop: transcribe whatever's still buffered (the last <2.5s
+  // that the interval timer hasn't flushed yet) before tearing down, then
+  // return the full accumulated transcript so the caller can use it as a query.
+  const flushAndStop = async () => {
+    if (listeningRef.current) {
+      try { await transcribeBuffered(); } catch {}
+    }
+    const text = (voiceBaseRef.current || "").trim();
+    stopAll();
+    return text;
+  };
+
   const toggleVoice = async () => {
     if (listeningRef.current) {
       stopAll();
@@ -250,5 +262,5 @@ export function useVoiceInput(input, setInput) {
     startWebSpeech();
   };
 
-  return { listening, voiceError, voiceLoading, toggleVoice };
+  return { listening, voiceError, voiceLoading, toggleVoice, flushAndStop, stopVoice: stopAll };
 }

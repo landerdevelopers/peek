@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Panel from "./Panel.jsx";
+import VoiceCapture from "./VoiceCapture.jsx";
 import BubbleStrip from "./BubbleStrip.jsx";
 import SelectionPopup from "./SelectionPopup.jsx";
 import ImageOcrPanel from "./ImageOcrPanel.jsx";
@@ -8,7 +9,8 @@ import { OCR_PROMPT } from "./prompts.js";
 import { anchorRefineUi, REFINE_UI_SIZES } from "./refinePosition.js";
 import { IconClose, IconPeek, IconSparkle } from "./Icons.jsx";
 
-import { BACKEND_KEY, resolveBackend, INSTALL_CLI_MESSAGE } from "./backends.js";
+import { BACKEND_KEY, resolveBackend, getModel, INSTALL_CLI_MESSAGE } from "./backends.js";
+import BackendsModal from "./BackendsModal.jsx";
 
 const MIN_DRAG = 6; // px — below this a click is treated as a miss-click, not a selection
 const BUBBLE_SIZE = 52;
@@ -16,6 +18,22 @@ const BUBBLE_PULL = 11; // px the docked tab slides outward on hover — "pulled
 const BUBBLE_DRAG_THRESHOLD = 3; // px — below this a bubble mousedown+up is a click, not a drag
 const BUBBLE_POS_KEY = "peek-bubble-pos"; // persists across restarts so the bubble stays where you left it
 const BUBBLE_EDGE_MARGIN = 16; // px kept between the bubble and the top/bottom while sliding along an edge
+
+// Stacking order inside the overlay — crop/dim layers stay well below the
+// chat bar so the full-screen dim never paints over the composer in image mode.
+const Z = {
+  PICK_DIM: 18,
+  CROP_DIM: 22,
+  DRAG_DIM: 26,
+  // While a chat bar is open the bubble tucks below it, so an overlapping
+  // bubble never paints over the composer; it returns to BUBBLE (topmost)
+  // when the panel is minimized or closed.
+  BUBBLE_TUCKED: 45,
+  IMAGE_CLOSE: 50,
+  PANEL: 52,
+  REFINE: 54,
+  BUBBLE: 60,
+};
 
 // The bubble is never freely positioned — it always rests flush against the
 // left or right edge (whichever the drag ended closer to), docked like a tab
@@ -41,9 +59,14 @@ function loadBubblePos() {
   return snapToSide(window.innerWidth - BUBBLE_SIZE - 24, window.innerHeight - BUBBLE_SIZE - 88);
 }
 
-function SpotlightMask({ rect, zIndex = 35, dim = 0.78 }) {
+// `animate` is off by default: this mask tracks a live drag, so easing its
+// position/size makes the selection box visibly chase the cursor with a lag.
+// Only enable the transition when the rect changes on its own (not per frame).
+function SpotlightMask({ rect, zIndex = 35, dim = 0.78, animate = false }) {
   if (!rect || rect.width < 1 || rect.height < 1) return null;
-  const maskTransition = "left 0.22s cubic-bezier(0.22, 1, 0.36, 1), top 0.22s cubic-bezier(0.22, 1, 0.36, 1), width 0.22s cubic-bezier(0.22, 1, 0.36, 1), height 0.22s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.22s ease";
+  const maskTransition = animate
+    ? "left 0.22s cubic-bezier(0.22, 1, 0.36, 1), top 0.22s cubic-bezier(0.22, 1, 0.36, 1), width 0.22s cubic-bezier(0.22, 1, 0.36, 1), height 0.22s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.22s ease"
+    : "none";
   return (
     <>
       <div style={{
@@ -128,7 +151,6 @@ function FrozenCropOverlay({ crop, zIndex = 34, dim = 0.78 }) {
 export default function App() {
   const [mode, setMode] = useState("idle");
   const [armed, setArmed] = useState(false);
-  const [menuView, setMenuView] = useState("root"); // "root" | "text-options"
   const [overlayMode, setOverlayMode] = useState("image"); // image | text | voice
   const [pickerImg, setPickerImg] = useState(null);
   const [ocrPanel, setOcrPanel] = useState(null); // null | { busy: true } | { text: string }
@@ -158,6 +180,10 @@ export default function App() {
   // shown briefly in place of the pill instead of just silently doing nothing.
   const [grabError, setGrabError] = useState(null);
   const draggingRef = useRef(false);
+  // Live drag rect, kept in a ref so mouseup can read the final size
+  // synchronously (distinguish a real drag-select from a plain click) without
+  // racing the setDrag state update.
+  const dragRef = useRef(null);
   // Click-through state: true = forwarding clicks to whatever's underneath
   // (so drag-selecting/selecting-elsewhere works), false = Peek's own UI
   // currently has the cursor and should receive clicks normally. Mirrors
@@ -195,6 +221,17 @@ export default function App() {
   const [answerReady, setAnswerReady] = useState(false);
   const [panelKey, setPanelKey] = useState(0);
   const [refineKey, setRefineKey] = useState(0);
+  // Refine popup minimize (mirrors the chat panel): an outside click / the
+  // minimize button tucks a real answer away to a small restorable pill instead
+  // of destroying it. refineProtect is true once there's an answer/chat worth
+  // protecting — the transient quick-action palette still dismisses on an
+  // outside click.
+  const [refineMinimized, setRefineMinimized] = useState(false);
+  const [refineProtect, setRefineProtect] = useState(false);
+  // Standalone "Manage AI backends & keys" modal, opened from the composer's
+  // backend picker — the same provider management that lives in the dashboard's
+  // Settings, surfaced right from the chat bar.
+  const [showBackends, setShowBackends] = useState(false);
   const [bubblePos, setBubblePos] = useState(loadBubblePos);
   // The close (×) badge only shows while actually hovering the bubble —
   // mouseenter/mouseleave (not mouseover/mouseout) so hovering the badge
@@ -212,12 +249,9 @@ export default function App() {
     window.peekDesktop?.setClickThrough(false);
   };
 
-  const openHover = (opts = {}) => {
+  const openHover = () => {
     if (!armed) return;
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
-    // Fresh hover from the bubble itself resets to Image/Text/Voice; moving
-    // from the bubble into the already-open strip keeps the current sub-view.
-    if (!opts.keepMenuView) setMenuView("root");
     setBubbleHovered(true);
   };
   const closeHoverSoon = () => {
@@ -238,7 +272,6 @@ export default function App() {
   // but leaves Peek active). Deliberately does NOT touch `mode` itself —
   // callers set that to whatever's appropriate for them.
   const resetSession = () => {
-    setMenuView("root");
     setPanelData(null);
     setPickerImg(null);
     setSelectionRect(null);
@@ -291,6 +324,21 @@ export default function App() {
     setSelectionRect(crop.rect);
   };
 
+  // The crop's × just drops the current selection — it does NOT close Peek.
+  // Clearing the crop/selection leaves image mode open with no active crop, so
+  // the frozen-crop frame disappears and the composer falls back to its default
+  // bottom-center slot (computeImagePanelLayout returns that when rect is null),
+  // ready to drag a fresh region. A pending screenshot is dropped so the next
+  // crop re-grabs the current screen.
+  const clearImageCrop = () => {
+    setPickerImg(null);
+    setPanelData(null);
+    setSelectionRect(null);
+    setCropHistory([]);
+    setActiveCropIndex(0);
+    setOcrPanel(null);
+  };
+
   // One overlay session at a time — starting Image/Text/Voice/Refine replaces
   // whatever panel or refine flow is open (including minimized background work).
   const replaceActiveSession = () => {
@@ -340,6 +388,12 @@ export default function App() {
     }
     setBubbleHovered(false);
   };
+  // Held in a ref because the onRestorePanel IPC handler is registered once (in
+  // the mount-only effect below); calling it directly would capture a stale
+  // closure that always sees the first render's mode/minimized, so the global
+  // Ctrl+↑ restore would silently no-op. Same pattern as standDownRef/armPeekRef.
+  const restoreMinimizedPanelRef = useRef(restoreMinimizedPanel);
+  restoreMinimizedPanelRef.current = restoreMinimizedPanel;
 
   useEffect(() => {
     if (!window.peekDesktop) return;
@@ -377,7 +431,7 @@ export default function App() {
     const offRecord = window.peekDesktop.onRecord(() => setMode("record"));
     const offOverlayBlur = window.peekDesktop.onOverlayBlur?.(() => setHasOsFocus(false));
     const offOverlayFocus = window.peekDesktop.onOverlayFocus?.(() => setHasOsFocus(true));
-    const offRestorePanel = window.peekDesktop.onRestorePanel?.(() => restoreMinimizedPanel());
+    const offRestorePanel = window.peekDesktop.onRestorePanel?.(() => restoreMinimizedPanelRef.current?.());
     const offOpenImage = window.peekDesktop.onOpenImage?.(() => chooseImageRef.current?.());
     const offOpenText = window.peekDesktop.onOpenText?.(() => chooseTextRef.current?.());
     return () => {
@@ -399,11 +453,16 @@ export default function App() {
   const grabSelection = async () => {
     const pos = pendingSelectionPos;
     setPendingSelectionPos(null);
-    replaceActiveSession();
+    // Refine is independent of the main chat — starting one must NOT end/collapse
+    // an open or minimized chat panel (they're different things and coexist).
+    // Setting selectedText/selectionPos + bumping refineKey below already
+    // replaces any *previous* refine popup, which is all we need to reset here.
     const res = await window.peekDesktop.grabSelection?.();
     if (res?.text) {
       setSelectedText(res.text);
       setSelectionPos(pos);
+      setRefineMinimized(false);
+      setRefineProtect(false);
       setRefineKey((k) => k + 1);
       return;
     }
@@ -414,11 +473,16 @@ export default function App() {
   const clearRefineSession = () => {
     setSelectedText(null);
     setSelectionPos(null);
+    setRefineMinimized(false);
+    setRefineProtect(false);
     setRefineKey((k) => k + 1);
   };
 
   const refineSessionActive = !!selectedText && !!selectionPos;
-  const selectionPopupVisible = refineSessionActive;
+  // "Visible" = the full popup is up (not tucked to the pill). Drives the
+  // full-interactive click-through override; a minimized refine falls back to
+  // per-pixel hit-testing so only the pill captures clicks.
+  const selectionPopupVisible = refineSessionActive && !refineMinimized;
   const ocrPanelOpen = !!ocrPanel;
 
   // Image-mode panel needs the full-screen backdrop for drag-to-reselect; every
@@ -454,7 +518,7 @@ export default function App() {
   // hit-testing below — only Peek's own UI elements capture clicks.
   useEffect(() => {
     if (mode === "record") return;
-    const unambiguous = selectionPopupVisible || ocrPanelOpen || mode === "picking" || panelNeedsFullCapture;
+    const unambiguous = selectionPopupVisible || ocrPanelOpen || mode === "picking" || panelNeedsFullCapture || showBackends;
     if (unambiguous) {
       if (clickThroughRef.current !== false) {
         forceInteractive();
@@ -462,22 +526,27 @@ export default function App() {
       return;
     }
     refreshClickThroughAtPoint(lastMousePosRef.current.x, lastMousePosRef.current.y);
-  }, [selectionPopupVisible, ocrPanelOpen, mode, minimized, panelNeedsFullCapture, bubbleHovered]);
+  }, [selectionPopupVisible, ocrPanelOpen, mode, minimized, panelNeedsFullCapture, bubbleHovered, showBackends]);
 
   // --- Bubble menu choices -------------------------------------------------
 
-  const chooseImage = async () => {
+  // Image mode opens exactly like Text mode — a normal chat modal, no
+  // full-screen dim, no crosshair, and crucially no screenshot grab up front
+  // (so entering/switching never blinks). The screen is captured lazily at
+  // crop time (onMouseUp), while the chatbar is already hidden by the drag.
+  const chooseImage = () => {
     setBubbleHovered(false);
     replaceActiveSession();
-    const shot = await window.peekDesktop.captureNow();
-    if (!shot) { setMode("bubble"); return; }
     forceInteractive();
-    setPickerImg(shot);
+    setPickerImg(null);
     setPanelData(null);
     setSelectionRect(null);
     setMinimized(false);
+    setPinned(false);
+    setHasOsFocus(true);
+    setInitialQuestion(null);
     setOverlayMode("image");
-    setMode("picking");
+    setMode("panel");
   };
 
   const chooseImageRef = useRef(chooseImage);
@@ -518,6 +587,7 @@ export default function App() {
       question: OCR_PROMPT,
       history: [],
       backend,
+      model: getModel(backend),
     });
     if (res?.error || !res?.text?.trim()) {
       setOcrPanel(null);
@@ -547,6 +617,34 @@ export default function App() {
     }
   };
 
+  // In-panel quick switch — jump between the chat bar, screenshot capture,
+  // and voice without going back to the bubble menu (see Panel's ModeSwitch).
+  // Text <-> Image swap in place: the same Panel stays mounted (no key bump,
+  // no bounce through the bubble), so only the inner mode tab + content
+  // transition — the chat bar itself never reloads. Voice uses a separate
+  // card, so those transitions still mount/unmount (both fade).
+  const switchMode = (m) => {
+    if (mode === "panel" && m === overlayMode) return;
+    if (m === "voice") { chooseVoice(); return; }
+    if (mode === "panel") {
+      // Pure in-place swap for ANY open panel — text, image, OR voice. Just
+      // flip overlayMode: the chat shell stays mounted for text<->image, and
+      // leaving voice unmounts the VoiceCapture card (its render is gated on
+      // overlayMode === "voice") while mounting the Panel fresh. No screenshot
+      // grab, no remount bounce through the bubble — that heavy path (via
+      // chooseText/chooseImage -> replaceActiveSession) was why switching out
+      // of voice didn't land.
+      setPickerImg(null);
+      setPanelData(null);
+      setSelectionRect(null);
+      setMinimized(false);
+      setOverlayMode(m);
+      return;
+    }
+    if (m === "image") chooseImage();
+    else chooseText();
+  };
+
   const chooseVoice = () => {
     setBubbleHovered(false);
     replaceActiveSession();
@@ -558,35 +656,6 @@ export default function App() {
     setPinned(false);
     setHasOsFocus(true);
     setInitialQuestion(null);
-    setMode("panel");
-  };
-
-  // All three Text starters open the panel as plain Text mode — you chose
-  // "Text" from the menu, so the Image tab shouldn't light up and the
-  // OCR/Attach buttons (image-specific tools) shouldn't show. "Chat with
-  // screen" and "Summarize screen" still silently attach a full-screen
-  // capture as context (Panel.jsx's send() attaches it whenever `data`
-  // exists, regardless of which tab is showing) — they just don't *look*
-  // like Image mode while doing it. "custom" has no screenshot at all.
-  const chooseTextStarter = async (key) => {
-    setBubbleHovered(false);
-    replaceActiveSession();
-    if (key === "custom") {
-      chooseText();
-      return;
-    }
-    const shot = await window.peekDesktop.captureNow();
-    if (!shot) { setMode("bubble"); return; }
-    const res = await (window.__peekTestSelect || window.peekDesktop.select)({ mode: "full" });
-    if (res?.error) { setMode("bubble"); return; }
-    setPickerImg(shot);
-    setPanelData(res);
-    setSelectionRect(null);
-    setOverlayMode("text");
-    setMinimized(false);
-    setPinned(false);
-    setHasOsFocus(true);
-    setInitialQuestion(key === "summarize" ? "Summarize what's on screen." : null);
     setMode("panel");
   };
 
@@ -631,15 +700,96 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== "Escape") return;
+      if (showBackends) { setShowBackends(false); return; }
       if (ocrPanel) { setOcrPanel(null); return; }
-      if (selectionPopupVisible) { clearRefineSession(); return; }
+      // Refine: first Escape tucks a real answer to the pill (preserved), a
+      // second closes it; the quick-action palette (nothing to protect) closes.
+      if (refineSessionActive) {
+        if (!refineMinimized && refineProtect) { setRefineMinimized(true); return; }
+        clearRefineSession(); return;
+      }
       if (bubbleHovered && mode === "bubble") { setBubbleHovered(false); return; }
       if (mode === "picking") { cancelPicking(); return; }
-      if (mode === "panel" && !minimized) { setMinimized(true); return; }
+      // Voice isn't minimizable (VoiceCapture isn't gated on `minimized`), so
+      // minimizing it would leave the card visible AND flag a minimized chat on
+      // the bubble — a contradiction. Match the bubble-click rule: text/image
+      // minimize, voice is left alone here (close it with its × instead).
+      if (mode === "panel" && !minimized && overlayMode !== "voice") { setMinimized(true); return; }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectionPopupVisible, ocrPanel, mode, minimized, bubbleHovered]);
+  }, [selectionPopupVisible, ocrPanel, mode, minimized, bubbleHovered, showBackends, overlayMode, refineSessionActive, refineMinimized, refineProtect]);
+
+  // Ctrl + arrow keys drive the open chat bar from the keyboard:
+  //   ← / →  cycle the input mode (text → screenshot → voice)
+  //   ↓      minimize the chat down to the bubble (text/image; voice isn't minimizable)
+  //   ↑      reopen the minimized chat
+  // ↓/←/→ act on an expanded chat; ↑ acts on a minimized one (it needs the
+  // overlay to still hold keyboard focus — true right after Ctrl+↓; otherwise
+  // click the bubble). Switching to image hands off to the capture flow like a click.
+  useEffect(() => {
+    if (!armed || mode !== "panel") return;
+    const order = ["text", "image", "voice"];
+    const onKey = (e) => {
+      if (!e.ctrlKey) return;
+      if (e.key === "ArrowUp") {
+        if (!minimized) return;
+        e.preventDefault();
+        restoreMinimizedPanel();
+        return;
+      }
+      if (minimized) return; // the rest only apply to an expanded chat
+      if (e.key === "ArrowDown") {
+        if (overlayMode === "voice") return; // voice card can't minimize
+        e.preventDefault();
+        setBubbleHovered(false);
+        setMinimized(true);
+        return;
+      }
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const cur = order.indexOf(overlayMode);
+        const base = cur < 0 ? 0 : cur;
+        const step = e.key === "ArrowRight" ? 1 : order.length - 1;
+        const next = order[(base + step) % order.length];
+        if (next !== overlayMode) switchMode(next);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [armed, mode, minimized, overlayMode]);
+
+  // Mirror the "chat is minimized" state to main so it can bind the global
+  // Ctrl/⌘+↑ reopen shortcut only while it's needed. Same condition as the
+  // in-page ↑ handler above — but this one survives the overlay losing focus,
+  // which is exactly when the in-page listener can't fire.
+  useEffect(() => {
+    const minChat = armed && mode === "panel" && minimized;
+    window.peekDesktop.setChatMinimized?.(minChat);
+    return () => window.peekDesktop.setChatMinimized?.(false);
+  }, [armed, mode, minimized]);
+
+  // Pre-capture the screen the instant image mode opens — the "take a
+  // screenshot first, then crop over it" model. The expensive full-screen
+  // desktopCapturer grab happens HERE, up front, so releasing a drag only has
+  // to crop an already-captured image (fast) instead of waiting on a fresh
+  // grab at that moment (the old flow's lag). No UI fade is needed anymore:
+  // captureSilent excludes Peek's own window from the grab at the OS level (see
+  // main.cjs), so the chatbar/bubble never land in the shot and entering image
+  // mode (incl. a text→image switch) no longer blinks.
+  useEffect(() => {
+    if (mode !== "panel" || overlayMode !== "image" || minimized) return;
+    if (pickerImg || panelData) return; // already captured, or already cropped
+    let cancelled = false;
+    (async () => {
+      const shot = await window.peekDesktop.captureSilent?.().catch(() => null);
+      if (cancelled) return;
+      if (shot) setPickerImg(shot);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, overlayMode, minimized, pickerImg, panelData]);
 
   // TEMP DEV-ONLY: ?test=panel bypasses desktopCapturer (unreliable in this
   // remote/virtualized sandbox) so the merged overlay flow can be visually
@@ -686,24 +836,21 @@ export default function App() {
     setMode("panel");
   }, []);
 
-  // Ends the current panel/session (Panel's Close button) — back to just the
-  // bubble, Peek stays active (selection hook keeps running). Distinct from
-  // deactivation (hotkey), which fully hides the bubble — see resetSession/onDeactivate.
+  // The Close (×) on any chat surface — the text/image chatbar, the voice
+  // card, or the image-crop close badge — fully removes Peek: the chatbar AND
+  // the bubble both disappear. Minimize (a separate control) is the only thing
+  // that tucks back down to the bubble; there's no "close the panel but keep
+  // the bubble armed" state anymore. Same path as the bubble's own × / the
+  // hotkey: deactivatePeek() in main.cjs stops the selection hook, cleans up
+  // the temp capture, sends peek:deactivate back (resetSession + mode "idle"),
+  // and hides the overlay window.
   const endPanel = () => {
-    window.peekDesktop.endSession?.();
-    resetSession();
-    setMode("bubble");
+    window.peekDesktop.deactivate?.();
   };
 
   // RecordHotkey (tray's "Change hotkey…") isn't part of the active-session
   // flow — always lands back on fully idle regardless of what was going on before.
   const closeRecord = () => setMode("idle");
-
-  const toNatural = (rect) => {
-    if (!pickerImg) return rect;
-    const scale = pickerImg.width / window.innerWidth;
-    return { x: rect.x * scale, y: rect.y * scale, width: rect.width * scale, height: rect.height * scale };
-  };
 
   const onMouseDown = (e) => {
     // Click-away-to-dismiss for the Refine flow — independent of whatever
@@ -711,13 +858,22 @@ export default function App() {
     // Peek is active (SelectionPopup is rendered as a sibling regardless of
     // `mode`). A mousedown reaching here (not stopped by the popup/pill's
     // own data-peek-ui wrapper) landed outside them.
-    // Click outside the Refine popup closes it; only starting a new flow
-    // or explicit Close clears via the same path (clearRefineSession).
-    if (selectionPopupVisible) { clearRefineSession(); return; }
+    // Click outside the Refine popup: tuck a real answer/chat away to the pill
+    // (preserved, restorable) rather than destroying it; only the transient
+    // quick-action palette dismisses outright. While minimized the overlay is
+    // click-through, so an outside click passes to the app underneath and this
+    // handler doesn't fire.
+    if (refineSessionActive) {
+      if (refineMinimized) return;
+      if (refineProtect) setRefineMinimized(true);
+      else clearRefineSession();
+      return;
+    }
     if (pendingSelectionPos) { setPendingSelectionPos(null); return; }
     if (mode === "picking") {
       draggingRef.current = true;
-      setDrag({ startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, w: 0, h: 0 });
+      dragRef.current = { startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, w: 0, h: 0 };
+      setDrag(dragRef.current);
       return;
     }
     if (mode !== "panel") return;
@@ -725,11 +881,17 @@ export default function App() {
     // before it reaches here); a mousedown landing here means the backdrop,
     // which is click-through — nothing to do.
     if (minimized) return;
-    // Text/voice: click outside the panel minimizes to the bubble tab (image
-    // mode uses the backdrop for re-cropping instead).
-    if (overlayMode === "text" || overlayMode === "voice") { setMinimized(true); return; }
+    // Text: click outside the panel minimizes to the bubble tab. Voice isn't
+    // minimizable (see the Escape handler) — its card is click-through so this
+    // rarely fires, but guard it so a stray backdrop click never starts a crop.
+    if (overlayMode === "text") { setMinimized(true); return; }
+    if (overlayMode === "voice") return;
+    // Image: a mousedown starts a *potential* drag-to-crop. Whether it was a
+    // real drag or just a click is decided on mouseup (small movement → treat
+    // as a click-outside and minimize, like text mode).
     draggingRef.current = true;
-    setDrag({ startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, w: 0, h: 0 });
+    dragRef.current = { startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, w: 0, h: 0 };
+    setDrag(dragRef.current);
   };
   const onMouseMove = (e) => {
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
@@ -751,12 +913,13 @@ export default function App() {
       return;
     }
     if (!draggingRef.current) return;
-    setDrag((d) => {
-      if (!d) return d;
-      const x = Math.min(d.startX, e.clientX);
-      const y = Math.min(d.startY, e.clientY);
-      return { ...d, x, y, w: Math.abs(e.clientX - d.startX), h: Math.abs(e.clientY - d.startY) };
-    });
+    const d = dragRef.current;
+    if (!d) return;
+    const x = Math.min(d.startX, e.clientX);
+    const y = Math.min(d.startY, e.clientY);
+    const next = { ...d, x, y, w: Math.abs(e.clientX - d.startX), h: Math.abs(e.clientY - d.startY) };
+    dragRef.current = next;
+    setDrag(next);
   };
   const onMouseUp = async () => {
     if (bubbleDragRef.current) {
@@ -767,6 +930,13 @@ export default function App() {
           armPeekRef.current?.();
         } else if (modeRef.current === "panel" && minimized) {
           restoreMinimizedPanel();
+        } else if (modeRef.current === "panel" && !minimized && overlayMode !== "voice") {
+          // An open text/image chat: clicking the bubble tucks it away — the
+          // Panel stays mounted (thread/input preserved), it just collapses to
+          // the bubble — instead of pausing Peek and discarding the session.
+          // Click the bubble again to bring the same chat right back.
+          setBubbleHovered(false);
+          setMinimized(true);
         } else {
           standDownRef.current?.();
         }
@@ -779,30 +949,44 @@ export default function App() {
       return;
     }
     draggingRef.current = false;
-    setDrag((d) => {
-      if (d && Math.max(d.w, d.h) >= MIN_DRAG) {
-        const cssRect = { x: d.x, y: d.y, width: d.w, height: d.h };
-        const rect = toNatural(cssRect);
-        (window.__peekTestSelect || window.peekDesktop.select)({ mode: "region", rect }).then((res) => {
-          if (!res?.error) {
-            if (modeRef.current === "picking") {
-              forceInteractive();
-              addCrop(res, cssRect);
-              setMinimized(false);
-              setOverlayMode("image");
-              setMode("panel");
-              return;
-            }
-            forceInteractive();
-            addCrop(res, cssRect);
-            setMinimized(false);
-            setOverlayMode("image");
-            setMode("panel");
-          }
-        });
+    const d = dragRef.current;
+    dragRef.current = null;
+    setDrag(null);
+    if (d && Math.max(d.w, d.h) >= MIN_DRAG) {
+      // A real drag. The screen was already grabbed when image mode opened (see
+      // the pre-capture effect), so cropping is instant — just slice that image
+      // to the selected rect. No full-screen grab and no fade on release, which
+      // is what used to make showing the selection feel slow. Only grab now as
+      // a fallback if the pre-capture somehow hasn't landed yet (very fast drag
+      // right after opening).
+      const cssRect = { x: d.x, y: d.y, width: d.w, height: d.h };
+      let shot = pickerImg;
+      if (!shot) {
+        // captureSilent excludes Peek's own window from the grab (main.cjs), so
+        // no UI fade is needed here either.
+        shot = await window.peekDesktop.captureSilent().catch(() => null);
+        if (shot) setPickerImg(shot);
       }
-      return null;
-    });
+      if (shot) {
+        const scale = shot.width / window.innerWidth;
+        const rect = {
+          x: cssRect.x * scale, y: cssRect.y * scale,
+          width: cssRect.width * scale, height: cssRect.height * scale,
+        };
+        const res = await (window.__peekTestSelect || window.peekDesktop.select)({ mode: "region", rect });
+        if (!res?.error) {
+          forceInteractive();
+          addCrop(res, cssRect);
+          setMinimized(false);
+          setOverlayMode("image");
+          setMode("panel");
+        }
+      }
+    } else if (d && modeRef.current === "panel" && overlayMode === "image" && !minimized) {
+      // Barely moved → a plain click on the backdrop. Behave like text mode
+      // and tuck the modal down to the bubble tab.
+      setMinimized(true);
+    }
   };
 
   const showFrame = mode === "panel" && overlayMode === "image" && !minimized;
@@ -827,14 +1011,32 @@ export default function App() {
     : bubbleDockedLeft
     ? "0 16px 16px 0"
     : "50%"; // free circle only while mid-drag, before it snaps back to an edge
-  // The mode strip (Image/Text/Voice) slides out on bubble hover only.
-  const showStrip = bubbleShown && armed && bubbleHovered;
   const activeChat = armed && mode === "panel" && minimized
     ? { kind: "panel", busy: panelBusy, ready: answerReady }
     : null;
+  // Side-dock geometry for a minimized Refine pill, so it tucks into the SAME
+  // edge stack as the bubble + minimized-chat strip instead of landing on top
+  // of them. It sits flush to the bubble's docked side, just past the bubble
+  // (and past the chat strip too, when a chat is also minimized). Mirrors
+  // BubbleStrip's above/below choice so the whole stack reads as one column.
+  const refineDockBelow = bubblePos.y < window.innerHeight / 2;
+  const refineDockOffset = 8 + (activeChat ? 44 /* strip button */ + 7 : 0);
+  const refineDock = {
+    onLeftSide: bubbleDockedLeft,
+    style: {
+      ...(bubbleDockedLeft ? { left: 0 } : { right: 0 }),
+      ...(refineDockBelow
+        ? { top: bubblePos.y + BUBBLE_SIZE + refineDockOffset }
+        : { bottom: window.innerHeight - bubblePos.y + refineDockOffset }),
+    },
+  };
   const activeCrop = cropHistory[activeCropIndex] || cropHistory[cropHistory.length - 1] || null;
   const showFrozenCrop = showFrame && !!activeCrop;
-  const pickingFocusRect = mode === "picking" && isDragging && drag && drag.w >= MIN_DRAG
+  // Dim + spotlight only while a region is actively being dragged out — in
+  // both legacy picking mode and the new image chat modal. Outside of a drag
+  // the surface stays clear (normal modal), never a dimmed capture screen.
+  const dragFocusRect = isDragging && drag && drag.w >= MIN_DRAG
+    && (mode === "picking" || (mode === "panel" && overlayMode === "image" && !minimized))
     ? { x: drag.x, y: drag.y, width: drag.w, height: drag.h }
     : null;
   const pendingPillPos = pendingSelectionPos
@@ -844,22 +1046,18 @@ export default function App() {
   return (
     <div
       className="peek-root peek-empty"
-      style={{ position: "fixed", inset: 0, cursor: (mode === "picking" || showFrame) ? "crosshair" : "default" }}
+      style={{
+        position: "fixed", inset: 0,
+        cursor: (mode === "picking" || showFrame) ? "crosshair" : "default",
+      }}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
     >
-      <SpotlightMask rect={pickingFocusRect} dim={0.5} />
-      {showFrozenCrop && <FrozenCropOverlay crop={activeCrop} />}
-      {showFrame && !selectionRect && !showFrozenCrop && (
-        <div style={{
-          position: "fixed", left: 0, top: 0, width: window.innerWidth, height: window.innerHeight,
-          border: "2px solid #C084FC", borderRadius: 0, pointerEvents: "none", zIndex: 36,
-          boxSizing: "border-box",
-        }} />
-      )}
-      {showFrame && (
-        <button onMouseDown={(e) => e.stopPropagation()} onClick={endPanel} title="Close" style={{
+      <SpotlightMask rect={dragFocusRect} dim={0.5} zIndex={Z.DRAG_DIM} />
+      {showFrozenCrop && <FrozenCropOverlay crop={activeCrop} zIndex={Z.CROP_DIM} />}
+      {showFrozenCrop && (
+        <button onMouseDown={(e) => e.stopPropagation()} onClick={clearImageCrop} title="Remove selection" style={{
           position: "fixed",
           ...(selectionRect
             ? {
@@ -867,7 +1065,7 @@ export default function App() {
                 top: Math.max(8, selectionRect.y - 36),
               }
             : { top: 18, left: 18 }),
-          width: 30, height: 30, zIndex: 47,
+          width: 30, height: 30, zIndex: Z.IMAGE_CLOSE,
           display: "flex", alignItems: "center", justifyContent: "center",
           background: "rgba(12,12,14,0.88)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "50%",
           color: "#fff", cursor: "pointer",
@@ -877,17 +1075,17 @@ export default function App() {
 
       {mode === "picking" && (
         <>
-          {!pickingFocusRect && (
-            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 30 }} />
+          {!dragFocusRect && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: Z.PICK_DIM }} />
           )}
           <button onMouseDown={(e) => e.stopPropagation()} onClick={cancelPicking} title="Cancel" style={{
-            position: "fixed", top: 18, left: 18, width: 30, height: 30, zIndex: 41,
+            position: "fixed", top: 18, left: 18, width: 30, height: 30, zIndex: Z.PANEL,
             display: "flex", alignItems: "center", justifyContent: "center",
             background: "rgba(20,10,25,0.55)", border: "none", borderRadius: "50%",
             color: "#fff", cursor: "pointer",
           }}><IconClose /></button>
           <div data-peek-ui="true" style={{
-            position: "fixed", left: "50%", bottom: 32, transform: "translateX(-50%)", zIndex: 41,
+            position: "fixed", left: "50%", bottom: 32, transform: "translateX(-50%)", zIndex: Z.PANEL,
             display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderRadius: 999,
             background: "rgba(20,10,25,0.82)", color: "#fff", fontSize: 12.5, fontWeight: 600,
             whiteSpace: "nowrap", boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
@@ -902,10 +1100,13 @@ export default function App() {
         </>
       )}
 
-      {!selectedText && armed && pendingPillPos && (
-        // Appears on selection gesture; disappears if nothing was copied.
+      {(!selectedText || refineMinimized) && armed && pendingPillPos && (
+        // Appears on selection gesture; disappears if nothing was copied. Also
+        // shows while a refine is only *minimized* — selecting fresh text then
+        // offers a new Refine, and clicking it (grabSelection) replaces the
+        // tucked-away one (refineKey bump remounts the popup on the new text).
         <div data-peek-ui="true" style={{
-          position: "fixed", left: pendingPillPos.left, top: pendingPillPos.top, zIndex: 50,
+          position: "fixed", left: pendingPillPos.left, top: pendingPillPos.top, zIndex: Z.REFINE,
         }}>
           <button
             onMouseDown={(e) => e.stopPropagation()}
@@ -927,7 +1128,7 @@ export default function App() {
           : { left: 8, top: 8 };
         return (
           <div style={{
-            position: "fixed", left: errPos.left, top: errPos.top, zIndex: 50,
+            position: "fixed", left: errPos.left, top: errPos.top, zIndex: Z.REFINE,
             display: "flex", alignItems: "center", gap: 6, padding: "7px 13px", borderRadius: 999,
             background: "rgba(120,20,20,0.92)", color: "#fff", fontSize: 12, fontWeight: 600,
             pointerEvents: "none", whiteSpace: "nowrap", boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
@@ -950,40 +1151,36 @@ export default function App() {
           selectedText={selectedText}
           selectionPos={selectionPos}
           onClear={clearRefineSession}
+          minimized={refineMinimized}
+          minimizedDock={refineDock}
+          onMinimize={() => setRefineMinimized(true)}
+          onRestore={() => setRefineMinimized(false)}
+          onProtectChange={setRefineProtect}
         />
       )}
 
-      {isDragging && mode !== "picking" && (
-        <div style={{
-          position: "fixed", left: drag.x, top: drag.y, width: drag.w, height: drag.h,
-          border: "2px solid #9333EA", borderRadius: 0, background: "rgba(147,51,234,0.08)",
-          pointerEvents: "none", zIndex: 45,
-        }} />
-      )}
-
-      {(activeChat || showStrip) && (
+      {activeChat && (
         <BubbleStrip
           bubblePos={bubblePos}
           bubbleSize={BUBBLE_SIZE}
           onLeftSide={bubbleDockedLeft}
           activeChat={activeChat}
-          menuOpen={showStrip}
-          view={menuView}
           onOpenChat={restoreMinimizedPanel}
-          onBack={() => setMenuView("root")}
-          onImage={chooseImage}
-          onVoice={chooseVoice}
-          onText={() => setMenuView("text-options")}
-          onTextStarter={chooseTextStarter}
-          onEnter={() => openHover({ keepMenuView: true })}
+          onEnter={() => openHover()}
           onLeave={closeHoverSoon}
         />
       )}
 
-      {armed && mode === "panel" && !isDragging && (overlayMode === "image" ? !!panelData : true) && (
+      {armed && mode === "panel" && overlayMode === "voice" && !isDragging && (
+        <VoiceCapture onClose={endPanel} onSwitchMode={switchMode} />
+      )}
+
+      {armed && mode === "panel" && overlayMode !== "voice" && !isDragging && (
         <div
-          style={{ zIndex: 48, cursor: "default", pointerEvents: minimized ? "none" : "auto" }}
-          onMouseDown={(e) => { if (!minimized) e.stopPropagation(); }}
+          style={{
+            position: "fixed", inset: 0, zIndex: Z.PANEL,
+            pointerEvents: "none", cursor: "default",
+          }}
         >
           <Panel
             key={panelKey}
@@ -995,6 +1192,8 @@ export default function App() {
             onHasContentChange={setPanelHasContent}
             onBusyChange={setPanelBusy}
             onAnswerReady={handleAnswerReady}
+            onSwitchMode={switchMode}
+            onManageBackends={() => setShowBackends(true)}
             cropHistory={overlayMode === "image" ? cropHistory : []}
             activeCropIndex={activeCropIndex}
             onSelectCrop={selectCrop}
@@ -1021,7 +1220,10 @@ export default function App() {
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
           onMouseEnter={() => openHover()}
           onMouseLeave={closeHoverSoon}
-          title={armed ? "Click to pause · × to close Peek" : "Click to activate Peek"}
+          title={!armed ? "Click to activate Peek"
+            : mode === "panel" && minimized ? "Click or Ctrl ↑ to reopen chat · × to close Peek"
+            : mode === "panel" && overlayMode !== "voice" ? "Click or Ctrl ↓ to minimize chat · × to close Peek"
+            : "Click to pause · × to close Peek"}
           style={{
             position: "fixed", left: bubbleLeft, top: bubblePos.y, width: bubbleWidth, height: BUBBLE_SIZE,
             borderRadius: bubbleRadius, background: armed ? "#fff" : "#ECECEC",
@@ -1039,7 +1241,8 @@ export default function App() {
               : armed
               ? "0 6px 20px rgba(0,0,0,0.12)"
               : "0 4px 14px rgba(0,0,0,0.08)",
-            cursor: armed ? "grab" : "pointer", zIndex: 60,
+            cursor: armed ? "grab" : "pointer",
+            zIndex: mode === "panel" && !minimized ? Z.BUBBLE_TUCKED : Z.BUBBLE,
             filter: armed ? "none" : "grayscale(1)",
             opacity: armed ? 1 : 0.72,
             transition: "width 0.24s cubic-bezier(0.34, 1.25, 0.64, 1), left 0.24s cubic-bezier(0.34, 1.25, 0.64, 1), box-shadow 0.24s ease, border-color 0.2s ease, filter 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.22s cubic-bezier(0.22, 1, 0.36, 1), background 0.22s ease",
@@ -1070,6 +1273,7 @@ export default function App() {
         </div>
       )}
       {mode === "record" && <RecordHotkey onDone={closeRecord} onCancel={closeRecord} />}
+      {showBackends && <BackendsModal onClose={() => setShowBackends(false)} />}
     </div>
   );
 }

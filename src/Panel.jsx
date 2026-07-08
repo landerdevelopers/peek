@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { LIGHT } from "./theme.js";
-import ChatTurn, { ThinkingBubble } from "./ChatTurn.jsx";
+import ChatTurn, { ThinkingBubble, UserBubble } from "./ChatTurn.jsx";
 import PillDropdown from "./PillDropdown.jsx";
 import { useVoiceInput } from "./useVoiceInput.js";
 import BackendPicker from "./BackendPicker.jsx";
-import { BACKEND_KEY, resolveBackend } from "./backends.js";
+import ModelPicker from "./ModelPicker.jsx";
+import { BACKEND_KEY, resolveBackend, modelKey } from "./backends.js";
 import { useInstalledBackends } from "./useInstalledBackends.js";
-import { IconClose, IconArrowUp, IconAttachment, IconMic, IconScanText, IconPin, IconMinimize, IconDownload } from "./Icons.jsx";
+import { IconClose, IconArrowUp, IconAttachment, IconMic, IconScanText, IconPin, IconMinimize, IconDownload, IconImage, IconChatTab } from "./Icons.jsx";
 import { OCR_PROMPT } from "./prompts.js";
 
 const DRAG_EDGE_MARGIN = 80;
@@ -113,15 +114,24 @@ function computeImagePanelLayout(rect, { width = COMPACT_W, heightEstimate = 52 
  */
 export default function Panel({
   data, mode, selectionRect, onClose, minimized, onMinimize, pinned, onTogglePin,
-  initialQuestion, onHasContentChange, onBusyChange, onAnswerReady,
+  initialQuestion, onHasContentChange, onBusyChange, onAnswerReady, onSwitchMode,
   cropHistory = [], activeCropIndex = 0, onSelectCrop,
   showImageCropActions = false, onExtractTextFromCrop, onSaveScreenshotFromCrop,
   extractTextBusy = false, saveScreenshotBusy = false,
+  onManageBackends,
 }) {
   const [thread, setThread] = useState([]); // [{q, a}]
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // The just-sent question, shown immediately (above the thinking bubble) while
+  // its answer generates so you can see what's being worked on; cleared once the
+  // answer lands in `thread`. Only set for fresh sends — regenerate already has
+  // the question in the thread.
+  const [pendingQuestion, setPendingQuestion] = useState(null);
   const [backend, setBackend] = useState(() => localStorage.getItem(BACKEND_KEY) || "");
+  // Chosen model within `backend` (empty = use the backend's default/env). Kept
+  // per backend in localStorage 'peek-model:<id>' and threaded into ask().
+  const [model, setModel] = useState(() => localStorage.getItem(modelKey(backend)) || "");
   const { available: installedBackends, loading: backendsLoading, hasAny: hasBackend } = useInstalledBackends();
   // Every answered question is saved (see main.cjs's peek:ask handler); this
   // dropdown lets a fresh capture continue an earlier conversation instead of
@@ -149,6 +159,11 @@ export default function Panel({
   // top/left tracking from wherever they dropped it. Not persisted across
   // sessions — a fresh Panel (new bubble-menu choice) always starts centered again.
   const [dragPos, setDragPos] = useState(null);
+  // Remembers where the bar was sitting so a text ↔ image tab click doesn't
+  // recompute layout and jump the whole shell to a new anchor.
+  const layoutAnchorRef = useRef(null);
+  const layoutFreezeRef = useRef(null);
+  const prevModeRef = useRef(mode);
   const dragStateRef = useRef(null); // {startX, startY, origX, origY} while a header drag is in progress
 
   const onHeaderMouseDown = (e) => {
@@ -177,12 +192,17 @@ export default function Panel({
   }, []);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
-  // A fresh crop (or re-crop) should re-anchor the panel — don't keep a
-  // manual drag position from the previous region.
+  // A fresh crop should re-anchor the panel — don't keep a manual drag
+  // position from the previous region. Mode tab switches alone must not move
+  // the bar (that was part of the text ↔ image blink).
   useEffect(() => {
-    if (mode === "image") setDragPos(null);
+    if (mode === "image" && selectionRect) setDragPos(null);
   }, [selectionRect, mode]);
   useEffect(() => { localStorage.setItem(BACKEND_KEY, backend); }, [backend]);
+  // Model follows the selected backend: load that backend's saved choice when
+  // it changes, and persist the current choice.
+  useEffect(() => { setModel(localStorage.getItem(modelKey(backend)) || ""); }, [backend]);
+  useEffect(() => { if (model) localStorage.setItem(modelKey(backend), model); }, [backend, model]);
   useEffect(() => {
     if (backendsLoading) return;
     const next = resolveBackend(backend, installedBackends);
@@ -238,16 +258,20 @@ export default function Panel({
     if (!question || busy || !backend) return;
     setInput("");
     setBusy(true);
+    setPendingQuestion(question);
     const gen = ++askGenRef.current;
     const history = thread.map((t) => ({ q: t.q, a: t.a }));
     const res = await window.peekDesktop.ask({
       ...(data ? { imagePath: data.imagePath, thumbDataUrl: data.thumbDataUrl } : {}),
-      question, history, backend, sessionId,
+      question, history, backend, model: model || undefined, sessionId,
+      // Text mode silently snapshots the screen as optional context (main-side).
+      screenContext: mode === "text",
     });
     if (gen !== askGenRef.current) return;
     if (res?.sessionId && res.sessionId !== sessionId) setSessionId(res.sessionId);
     const answer = res?.error ? `Couldn't get an answer: ${res.error}` : (res?.text || "(no answer)");
     setThread((t) => [...t, { q: question, a: answer }]);
+    setPendingQuestion(null);
     setBusy(false);
     if (minimizedRef.current) {
       onAnswerReady?.({ question, error: res?.error });
@@ -265,7 +289,8 @@ export default function Panel({
     const history = thread.slice(0, index).map((t) => ({ q: t.q, a: t.a }));
     const res = await window.peekDesktop.ask({
       ...(data ? { imagePath: data.imagePath, thumbDataUrl: data.thumbDataUrl } : {}),
-      question: turn.q, history, backend, sessionId,
+      question: turn.q, history, backend, model: model || undefined, sessionId,
+      screenContext: mode === "text",
     });
     if (gen !== askGenRef.current) return;
     if (res?.sessionId && res.sessionId !== sessionId) setSessionId(res.sessionId);
@@ -288,7 +313,7 @@ export default function Panel({
     if (ocrBusy || !data) return;
     setOcrBusy(true);
     const res = await window.peekDesktop.ask({
-      imagePath: data.imagePath, question: OCR_PROMPT, history: [], backend,
+      imagePath: data.imagePath, question: OCR_PROMPT, history: [], backend, model: model || undefined,
       sessionId, thumbDataUrl: data.thumbDataUrl,
     });
     setOcrBusy(false);
@@ -327,16 +352,24 @@ export default function Panel({
     if (!minimized) openedAt.current = Date.now();
   }, [minimized, selectionRect]);
 
+  // Only text (chat) mode auto-minimizes when focus leaves the overlay —
+  // image mode keeps the modal up so you can click around the screen while
+  // reading/asking about the capture; it's only ever hidden during a crop drag
+  // (handled in App.jsx), never by a focus change.
   useEffect(() => {
-    if (minimized || pinned) return;
+    if (minimized || pinned || mode !== "text") return;
     return window.peekDesktop.onOverlayBlur?.(() => {
       if (Date.now() - openedAt.current < 600) return;
       onMinimize?.();
     });
-  }, [minimized, onMinimize, pinned]);
+  }, [minimized, onMinimize, pinned, mode]);
 
   const hasThread = thread.length > 0 || busy;
-  const expanded = focused || input.trim().length > 0 || busy || hasThread || mode === "voice";
+  // Once the text/image bar is open, keep the composer shell stable — clicking
+  // a mode tab blurs the textarea, and without this that collapse would flash
+  // the whole chatbar dark/light on every text ↔ image switch.
+  const pinnedComposer = !minimized && (mode === "text" || mode === "image");
+  const expanded = focused || input.trim().length > 0 || busy || hasThread || mode === "voice" || pinnedComposer;
   const isMinimal = !expanded;
   const panelWidth = isMinimal ? COMPACT_W : EXPANDED_W;
 
@@ -349,27 +382,41 @@ export default function Panel({
 
   const heightEstimate = (isMinimal ? 52 : hasThread ? 300 : showToolbar ? 100 : 52)
     + (showImageCropActions ? CROP_ACTIONS_EXTRA : 0);
-  const imageLayout = mode === "image" && !dragPos
+
+  if (prevModeRef.current !== mode) {
+    const tabSwitch = (prevModeRef.current === "text" || prevModeRef.current === "image")
+      && (mode === "text" || mode === "image");
+    if (tabSwitch && layoutAnchorRef.current) layoutFreezeRef.current = layoutAnchorRef.current;
+    else if (!tabSwitch) layoutFreezeRef.current = null;
+    prevModeRef.current = mode;
+  }
+  if (selectionRect) layoutFreezeRef.current = null;
+
+  // Text mode has no crop to anchor to, so it stays in the fixed bottom-center
+  // slot; only image mode is positioned off the crop (computeImagePanelLayout).
+  const defaultPos = { left: "50%", bottom: 32, transform: "translateX(-50%)" };
+  const imageLayout = mode === "image" && !dragPos && !layoutFreezeRef.current
     ? computeImagePanelLayout(selectionRect, { width: panelWidth, heightEstimate })
     : null;
 
   const panelPos = dragPos
     ? { left: dragPos.x, top: dragPos.y }
-    : imageLayout?.pos ?? { left: "50%", bottom: 32, transform: "translateX(-50%)" };
-  const panelMaxHeight = imageLayout?.maxHeight ?? "74vh";
+    : layoutFreezeRef.current?.pos ?? imageLayout?.pos ?? defaultPos;
+  const panelMaxHeight = layoutFreezeRef.current?.maxHeight ?? imageLayout?.maxHeight ?? "74vh";
+  layoutAnchorRef.current = { pos: panelPos, maxHeight: panelMaxHeight, width: panelWidth };
 
   const wrapperStyle = {
     position: "fixed",
     ...panelPos,
     width: panelWidth,
     maxWidth: "92vw",
-    zIndex: 48,
+    zIndex: 52,
     display: "flex",
     flexDirection: "column",
     alignItems: "stretch",
     gap: 8,
     cursor: "default",
-    transition: "width 0.22s ease, top 0.22s ease, left 0.22s ease",
+    transition: "width 0.28s cubic-bezier(0.22, 1, 0.36, 1), top 0.28s cubic-bezier(0.22, 1, 0.36, 1), left 0.28s cubic-bezier(0.22, 1, 0.36, 1), transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), bottom 0.28s cubic-bezier(0.22, 1, 0.36, 1)",
   };
 
   const shellStyle = {
@@ -378,19 +425,15 @@ export default function Panel({
     cursor: "default",
     display: "flex",
     flexDirection: "column",
-    transition: "width 0.22s ease, box-shadow 0.22s ease, background 0.22s ease",
+    transition: "width 0.28s cubic-bezier(0.22, 1, 0.36, 1), max-height 0.28s ease, box-shadow 0.28s ease, background 0.28s ease, border-radius 0.28s ease",
     ...(isMinimal ? {
-      background: "rgba(22,22,26,0.96)",
-      backdropFilter: "blur(14px)",
-      WebkitBackdropFilter: "blur(14px)",
+      background: "#17171B",
       borderRadius: 14,
       overflow: "visible",
       border: "1px solid rgba(255,255,255,0.14)",
       boxShadow: "0 14px 44px rgba(0,0,0,0.62), 0 0 0 1px rgba(255,255,255,0.06)",
     } : isComposerOnly ? {
-      background: "rgba(255,255,255,0.98)",
-      backdropFilter: "blur(12px)",
-      WebkitBackdropFilter: "blur(12px)",
+      background: "#FFFFFF",
       borderRadius: 14,
       overflow: "hidden",
       border: "1px solid rgba(0,0,0,0.09)",
@@ -445,7 +488,7 @@ export default function Panel({
     <button
       className="peek-interactive"
       onClick={onMinimize}
-      title="Minimize — keep working, we'll notify you when the answer is ready"
+      title="Minimize (Ctrl ↓) — keep working, we'll notify you when the answer is ready"
       style={{
         display: "flex", alignItems: "center", justifyContent: "center",
         width: light ? 28 : 30, height: light ? 28 : 30,
@@ -489,6 +532,14 @@ export default function Panel({
     </button>
   );
 
+  // Quick input-mode switch shown right in the chat bar so you can jump
+  // straight from a typed question to a screenshot (or voice) without going
+  // back to the bubble menu. Switching hands off to App.jsx, which starts the
+  // chosen mode (image → capture + region pick) in a fresh session.
+  const modeSwitchEl = (dark) => (
+    <ModeSwitch mode={mode} onSwitch={onSwitchMode} dark={dark} />
+  );
+
   const composerToolbar = (
     <div style={{
       maxHeight: showToolbar ? 44 : 0, opacity: showToolbar ? 1 : 0, overflow: "hidden",
@@ -530,7 +581,8 @@ export default function Panel({
             ><IconScanText /></PillIconBtn>
           </>
         )}
-        <BackendPicker value={backend} onChange={setBackend} />
+        <BackendPicker value={backend} onChange={setBackend} onManage={onManageBackends} />
+        <ModelPicker backendId={backend} value={model} onChange={setModel} />
         {sessions.length > 0 && (
           <PillDropdown
             value={sessionId || ""}
@@ -547,15 +599,17 @@ export default function Panel({
     <div
       data-peek-ui="true"
       className={`peek-panel-shell${minimized ? " peek-panel-shell--hidden" : ""}`}
-      style={wrapperStyle}
+      style={{ ...wrapperStyle, pointerEvents: minimized ? "none" : "auto" }}
       aria-hidden={minimized}
+      onMouseDown={(e) => { if (!minimized) e.stopPropagation(); }}
     >
     <div
       ref={panelRef}
       style={shellStyle}
     >
       {isMinimal ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 10px 9px 14px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 10px 9px 12px" }}>
+          {onSwitchMode && modeSwitchEl(true)}
           {composerTextarea(true)}
           {sendBtn(true)}
           {minimizeBtn(true)}
@@ -564,6 +618,7 @@ export default function Panel({
       ) : isComposerOnly ? (
         <div style={{ padding: "8px 10px", display: "flex", flexDirection: "column", gap: showToolbar ? 8 : 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {onSwitchMode && modeSwitchEl(false)}
             {composerTextarea(false)}
             {mode === "voice" && (
               <PillIconBtn
@@ -613,16 +668,19 @@ export default function Panel({
               />
             ))}
             {busy && (
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <ThinkingBubble />
-                <button
-                  onClick={onMinimize}
-                  style={{
-                    background: LIGHT.borderSoft, border: `1px solid ${LIGHT.border}`, borderRadius: 999,
-                    padding: "6px 12px", fontSize: 12, fontWeight: 600, color: LIGHT.text, cursor: "pointer",
-                    whiteSpace: "nowrap",
-                  }}
-                >Minimize</button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {pendingQuestion && <UserBubble text={pendingQuestion} />}
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <ThinkingBubble />
+                  <button
+                    onClick={onMinimize}
+                    style={{
+                      background: LIGHT.borderSoft, border: `1px solid ${LIGHT.border}`, borderRadius: 999,
+                      padding: "6px 12px", fontSize: 12, fontWeight: 600, color: LIGHT.text, cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >Minimize</button>
+                </div>
               </div>
             )}
           </div>
@@ -638,7 +696,8 @@ export default function Panel({
             <div style={{
               borderRadius: 14, border: `1px solid ${LIGHT.border}`, background: LIGHT.bg, overflow: "hidden",
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px 7px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px 7px 12px" }}>
+                {onSwitchMode && modeSwitchEl(false)}
                 {composerTextarea(false)}
                 {mode === "voice" && (
                   <PillIconBtn
@@ -709,6 +768,64 @@ export default function Panel({
         </button>
       </div>
     )}
+    </div>
+  );
+}
+
+const MODE_SWITCH_ITEMS = [
+  { key: "text", Icon: IconChatTab, title: "Text" },
+  { key: "image", Icon: IconImage, title: "Screenshot" },
+  { key: "voice", Icon: IconMic, title: "Voice" },
+];
+
+function ModeSwitch({ mode, onSwitch, dark }) {
+  const activeIdx = MODE_SWITCH_ITEMS.findIndex((i) => i.key === mode);
+  const idx = activeIdx < 0 ? 0 : activeIdx;
+  const pillW = 26;
+  const pillH = 24;
+  const gap = 2;
+  const pad = 2;
+  return (
+    <div
+      title="Switch input"
+      style={{
+        position: "relative", display: "flex", gap, padding: pad, borderRadius: 999, flexShrink: 0,
+        background: dark ? "rgba(255,255,255,0.09)" : "#ECECEC",
+      }}
+    >
+      <div
+        aria-hidden
+        style={{
+          position: "absolute", top: pad, left: pad + idx * (pillW + gap),
+          width: pillW, height: pillH, borderRadius: 999,
+          background: dark ? "#fff" : "#000",
+          transition: "left 0.22s cubic-bezier(0.22, 1, 0.36, 1), background 0.18s ease",
+          pointerEvents: "none",
+        }}
+      />
+      {MODE_SWITCH_ITEMS.map(({ key, Icon, title }) => {
+        const active = mode === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            title={title}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { if (!active) onSwitch?.(key); }}
+            style={{
+              position: "relative", zIndex: 1,
+              width: pillW, height: pillH, borderRadius: 999, border: "none",
+              cursor: active ? "default" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "transparent",
+              color: active ? (dark ? "#111" : "#fff") : (dark ? "rgba(255,255,255,0.72)" : "#6B6B6B"),
+              transition: "color 0.18s ease",
+            }}
+          >
+            <Icon style={{ width: 14, height: 14 }} />
+          </button>
+        );
+      })}
     </div>
   );
 }

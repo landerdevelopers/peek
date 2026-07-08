@@ -5,9 +5,17 @@ import { IconChevronDown } from "./Icons.jsx";
 // way that matches the rest of the app, so the backend/session pickers use
 // this custom pill + floating menu instead — same visual language as the
 // Recents row's three-dot menu.
-export default function PillDropdown({ value, options, onChange, minWidth = 130, placement = "up", align = "left" }) {
+//
+// options entries may be selectable ({ value, label }) or non-selectable
+// section headers ({ header: true, label }) so the backend picker can group
+// CLI / API / Local. An optional onManage renders a footer action (e.g.
+// "Manage backends & keys…") pinned below the options.
+export default function PillDropdown({
+  value, options, onChange, minWidth = 130, placement = "up", align = "left",
+  onManage, manageLabel = "Manage backends & keys…",
+}) {
   const [open, setOpen] = useState(false);
-  const current = options.find((o) => o.value === value);
+  const current = options.find((o) => !o.header && o.value === value);
 
   return (
     <div style={{ position: "relative" }}>
@@ -30,13 +38,21 @@ export default function PillDropdown({ value, options, onChange, minWidth = 130,
             ...(align === "right" ? { right: 0 } : { left: 0 }),
             background: "#fff", border: "1px solid #E7E7E7", borderRadius: 10,
             boxShadow: "0 8px 24px rgba(0,0,0,0.14)", padding: 4, minWidth,
-            display: "flex", flexDirection: "column",
+            display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto",
           }}>
-            {options.map((o) => {
+            {options.map((o, i) => {
+              if (o.header) {
+                return (
+                  <div key={`h-${i}`} style={{
+                    padding: "7px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "#96938D",
+                    textTransform: "uppercase", letterSpacing: "0.05em",
+                  }}>{o.label}</div>
+                );
+              }
               const active = o.value === value;
               return (
                 <button
-                  key={o.value}
+                  key={o.value ?? `o-${i}`}
                   className="peek-interactive"
                   onClick={() => { onChange(o.value); setOpen(false); }}
                   style={{
@@ -49,6 +65,20 @@ export default function PillDropdown({ value, options, onChange, minWidth = 130,
                 >{o.label}</button>
               );
             })}
+            {onManage && (
+              <button
+                className="peek-interactive"
+                onClick={() => { setOpen(false); onManage(); }}
+                style={{
+                  marginTop: 4, borderTop: "1px solid #F0F0F0", paddingTop: 8,
+                  display: "flex", alignItems: "center", background: "transparent",
+                  border: "none", borderRadius: 6, color: "#7C3AED", padding: "8px 10px",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer", textAlign: "left",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#F7F2FF"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >{manageLabel}</button>
+            )}
           </div>
         </>
       )}

@@ -62,6 +62,20 @@ export default function ChatTurn({ question, answer, isLast, busy, onRegenerate 
   );
 }
 
+// The user's question bubble on its own — shown immediately while an answer is
+// still generating (Panel's pending-question preview) so you can see what's
+// being worked on. Matches the question bubble ChatTurn renders.
+export function UserBubble({ text }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <div className="peek-selectable" style={{
+        maxWidth: 520, color: LIGHT.text, ...USER_BUBBLE,
+        borderRadius: "18px 18px 4px 18px", padding: "10px 16px", fontSize: 14, fontWeight: 500, lineHeight: 1.45,
+      }}>{text}</div>
+    </div>
+  );
+}
+
 export function ThinkingBubble() {
   return (
     <div style={{

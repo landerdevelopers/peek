@@ -1,31 +1,20 @@
 import { useState } from "react";
-import { IconImage, IconChatTab, IconMic, IconCondense, IconWand, IconArrowLeft } from "./Icons.jsx";
+import { IconChatTab } from "./Icons.jsx";
 const BTN = 44;
 const STRIP_ITEM_PULL = 10;
 const PULL_EASE = "0.24s cubic-bezier(0.34, 1.25, 0.64, 1)";
 
-const ROOT_ITEMS = [
-  { key: "image", label: "Image", Icon: IconImage },
-  { key: "text", label: "Text", Icon: IconChatTab },
-  { key: "voice", label: "Voice", Icon: IconMic },
-];
-
-const TEXT_STARTERS = [
-  { key: "chat", label: "Chat with screen", Icon: IconChatTab },
-  { key: "summarize", label: "Summarize screen", Icon: IconCondense },
-  { key: "custom", label: "Ask something", Icon: IconWand },
-];
-
+// The minimized-chat indicator beside the bubble — a single "Open chat" pill
+// you click (or press Ctrl+↑) to bring a tucked-away chat back. The old
+// hover-to-open mode menu (Ask / Screenshot / Voice…) was removed: chats open
+// via the hotkey and switch modes in-bar now.
 export default function BubbleStrip({
-  bubblePos, bubbleSize, onLeftSide, view,
-  activeChat, menuOpen,
-  onOpenChat, onImage, onText, onVoice, onTextStarter, onBack, onEnter, onLeave,
+  bubblePos, bubbleSize, onLeftSide,
+  activeChat, onOpenChat, onEnter, onLeave,
 }) {
-  if (!activeChat && !menuOpen) return null;
+  if (!activeChat) return null;
 
   const openBelow = bubblePos.y < window.innerHeight / 2;
-  const items = view === "text-options" ? TEXT_STARTERS : ROOT_ITEMS;
-  const radius = onLeftSide ? "0 13px 13px 0" : "13px 0 0 13px";
   const activeRadius = onLeftSide ? "0 14px 14px 0" : "14px 0 0 14px";
 
   const positionStyle = {
@@ -36,20 +25,11 @@ export default function BubbleStrip({
       : { bottom: window.innerHeight - bubblePos.y + 8 }),
   };
 
-  const handleClick = (key) => {
-    if (view === "text-options") { onTextStarter(key); return; }
-    if (key === "image") onImage();
-    else if (key === "voice") onVoice();
-    else onText();
-  };
-
-  const chatLabel = activeChat?.ready
+  const chatLabel = activeChat.ready
     ? "Answer ready"
-    : activeChat?.busy
+    : activeChat.busy
     ? "Thinking…"
     : "Open chat";
-
-  const ChatIcon = IconChatTab;
 
   return (
     <div
@@ -63,23 +43,15 @@ export default function BubbleStrip({
         alignItems: onLeftSide ? "flex-start" : "flex-end",
       }}
     >
-      {activeChat && (
-        <StripButton
-          Icon={ChatIcon}
-          label={chatLabel}
-          onClick={onOpenChat}
-          onLeftSide={onLeftSide}
-          radius={activeRadius}
-          light
-          status={activeChat.ready ? "ready" : activeChat.busy ? "busy" : null}
-        />
-      )}
-      {menuOpen && view === "text-options" && (
-        <StripButton Icon={IconArrowLeft} label="Back" onClick={onBack} onLeftSide={onLeftSide} radius={activeRadius} light />
-      )}
-      {menuOpen && items.map(({ key, label, Icon }) => (
-        <StripButton key={key} Icon={Icon} label={label} onClick={() => handleClick(key)} onLeftSide={onLeftSide} radius={radius} />
-      ))}
+      <StripButton
+        Icon={IconChatTab}
+        label={chatLabel}
+        onClick={onOpenChat}
+        onLeftSide={onLeftSide}
+        radius={activeRadius}
+        light
+        status={activeChat.ready ? "ready" : activeChat.busy ? "busy" : null}
+      />
     </div>
   );
 }

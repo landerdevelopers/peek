@@ -8,6 +8,19 @@ function primaryModifier() {
   return isMac ? UiohookKey.Meta : UiohookKey.Ctrl;
 }
 
+// The main "open Peek" gesture: a quick double-tap of the primary modifier —
+// Ctrl on Windows/Linux, ⌘ (Cmd) on macOS. Both the left and right physical
+// keys count so it works regardless of which one the user taps.
+function hotkeyModifierKeycodes() {
+  return isMac
+    ? new Set([UiohookKey.Meta, UiohookKey.MetaRight])
+    : new Set([UiohookKey.Ctrl, UiohookKey.CtrlRight]);
+}
+
+function hotkeyLabel() {
+  return isMac ? "Double-tap ⌘" : "Double-tap Ctrl";
+}
+
 function simulateCopy(uIOhook) {
   const mod = primaryModifier();
   try {
@@ -84,6 +97,8 @@ function modifierHintLabels() {
 module.exports = {
   isMac,
   primaryModifier,
+  hotkeyModifierKeycodes,
+  hotkeyLabel,
   simulateCopy,
   simulatePaste,
   isSelectAllKeyEvent,

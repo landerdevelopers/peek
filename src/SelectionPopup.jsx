@@ -3,13 +3,13 @@ import { LIGHT } from "./theme.js";
 import { RichText } from "./Markdown.jsx";
 import { ThinkingBubble } from "./ChatTurn.jsx";
 import { getRefineActions } from "./refineContext.js";
-import { anchorRefinePopup } from "./refinePosition.js";
+import { anchorRefineCard } from "./refinePosition.js";
 import SaveAsMenu from "./SaveAsMenu.jsx";
 import {
-  IconClose, IconPeek, IconSettings, IconArrowUp,
+  IconClose, IconPeek, IconSettings, IconArrowUp, IconMinimize,
 } from "./Icons.jsx";
 
-import { BACKEND_KEY, resolveBackend, INSTALL_CLI_MESSAGE } from "./backends.js";
+import { BACKEND_KEY, resolveBackend, getModel, INSTALL_CLI_MESSAGE } from "./backends.js";
 import { useInstalledBackends } from "./useInstalledBackends.js";
 
 const POPUP_WIDTH = 420;
@@ -59,6 +59,7 @@ const closeBtnStyle = {
  */
 export default function SelectionPopup({
   selectedText, selectionPos, onClear,
+  minimized, minimizedDock, onMinimize, onRestore, onProtectChange,
 }) {
   const { available: installedBackends } = useInstalledBackends();
   const [view, setView] = useState("palette"); // "palette" | "answer" | "chat"
@@ -78,6 +79,11 @@ export default function SelectionPopup({
   const chatScrollRef = useRef(null);
 
   const quickActions = useMemo(() => getRefineActions().actions, []);
+
+  // Tell the host whether there's a real answer/chat worth protecting from an
+  // accidental outside-click (vs the transient quick-action palette, which is
+  // fine to dismiss). Drives whether an outside click minimizes or clears.
+  useEffect(() => { onProtectChange?.(view !== "palette"); }, [view, onProtectChange]);
 
   useEffect(() => {
     setPaletteQuery("");
@@ -113,6 +119,7 @@ export default function SelectionPopup({
       question: instruction,
       history: [],
       backend,
+      model: getModel(backend),
     });
     setBusy(false);
     if (res?.error || !res?.text) {
@@ -212,6 +219,7 @@ export default function SelectionPopup({
       question,
       history,
       backend,
+      model: getModel(backend),
     });
     const reply = res?.error
       ? `Couldn't get an answer: ${res.error}`
@@ -229,9 +237,16 @@ export default function SelectionPopup({
   // regardless of where on the display the selection was made. The actual
   // rendered cap (below, per view) is relative to the viewport so it scales
   // with screen size instead of hitting a cramped fixed pixel ceiling.
-  const viewKey = view === "loading" ? "loading" : view;
-  const { left, top } = anchorRefinePopup(selectionPos, viewKey);
-  const tallViewMaxHeight = Math.min(window.innerHeight * 0.72, window.innerHeight - top - 24);
+  // Anchor once to the selection EDGE and keep every later view (loading /
+  // answer / chat) pinned to that same edge. anchorRefineCard hugs the selection
+  // (drops below, or rises from just above it) so the card opens right at the
+  // refine spot instead of far off, and the choice depends only on the selection
+  // (not the view), so clicking a quick action never makes it jump. Taller views
+  // grow within tallViewMaxHeight (scrolling internally) instead of moving.
+  const { pos: cardPos, maxHeight: tallViewMaxHeight } = useMemo(
+    () => anchorRefineCard(selectionPos, { width: POPUP_WIDTH }),
+    [selectionPos],
+  );
 
   const chatExportText = chatThread.length
     ? chatThread.map((t) => `## ${t.q}\n\n${t.a}`).join("\n\n---\n\n")
@@ -244,11 +259,22 @@ export default function SelectionPopup({
     color: dark ? "rgba(255,255,255,0.7)" : LIGHT.muted,
   });
 
-  const popupChrome = (dark) => (
+  const popupChrome = (dark, withMinimize) => (
     <div style={{
       position: "absolute", top: 8, right: 8, zIndex: 2,
       display: "flex", alignItems: "center", gap: 4,
     }}>
+      {withMinimize && (
+        <button
+          type="button"
+          className="peek-interactive"
+          onClick={onMinimize}
+          title="Minimize — keeps your result"
+          style={chromeBtn(dark)}
+          onMouseEnter={(e) => { e.currentTarget.style.background = dark ? "rgba(255,255,255,0.14)" : "#EAE7E1"; }}
+          onMouseLeave={(e) => { Object.assign(e.currentTarget.style, chromeBtn(dark)); }}
+        ><IconMinimize style={{ width: 13, height: 13 }} /></button>
+      )}
       <button
         type="button"
         className="peek-interactive"
@@ -261,18 +287,68 @@ export default function SelectionPopup({
     </div>
   );
 
+  // Minimized: collapse to a small pill at the same anchor. The result/chat
+  // state lives on (this component stays mounted), so reopening restores it
+  // exactly. While minimized the rest of the overlay is click-through, so you
+  // can interact with the app underneath and tap the pill to bring it back.
+  if (minimized) {
+    // Dock into the bubble's edge stack (computed in App as `minimizedDock`) so
+    // the Refine pill tucks in alongside the bubble + minimized-chat strip
+    // instead of overlapping them — the same "tucked to the side" resting spot
+    // as the minimized main chat. Fall back to the selection's nearest edge if
+    // no dock was provided. Inner corners round; the outer edge squares off.
+    const onLeftSide = minimizedDock
+      ? minimizedDock.onLeftSide
+      : selectionPos.x < window.innerWidth / 2;
+    const dockStyle = minimizedDock
+      ? minimizedDock.style
+      : {
+          top: Math.min(Math.max(selectionPos.y - 20, 12), window.innerHeight - 52),
+          ...(onLeftSide ? { left: 0 } : { right: 0 }),
+        };
+    return (
+      <div
+        data-peek-ui="true"
+        onMouseDown={(e) => e.stopPropagation()}
+        className="peek-pop-in"
+        style={{ position: "fixed", zIndex: 100, ...dockStyle }}
+      >
+        <button
+          type="button"
+          className="peek-interactive"
+          onClick={onRestore}
+          title="Reopen — your result is saved"
+          style={{
+            display: "flex", alignItems: "center", gap: 7,
+            padding: onLeftSide ? "8px 14px 8px 11px" : "8px 11px 8px 14px",
+            borderRadius: onLeftSide ? "0 999px 999px 0" : "999px 0 0 999px",
+            background: "#1E1E1E", color: "#EDEDED", border: "none", cursor: "pointer",
+            fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap",
+            boxShadow: "0 10px 26px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.06)",
+          }}
+        >
+          <IconPeek width={16} loading={busy} style={{ color: "#fff", flexShrink: 0 }} />
+          {busy ? "Refining…" : "Refine"}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       data-peek-ui="true"
       onMouseDown={(e) => e.stopPropagation()}
       className="peek-panel-shell"
-      style={{ position: "fixed", left, top, zIndex: 100, width: POPUP_WIDTH }}
+      style={{ position: "fixed", ...cardPos, zIndex: 100, width: POPUP_WIDTH }}
     >
       {view === "palette" && (
         <div className="peek-pop-in" style={{
           position: "relative",
           background: "#1E1E1E", borderRadius: 14, padding: 6, display: "flex", flexDirection: "column", gap: 2,
           boxShadow: "0 10px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06)",
+          // Cap to the room anchorRefineCard measured at this edge so the list
+          // scrolls instead of spilling past the overlay's bottom (the taskbar).
+          maxHeight: tallViewMaxHeight, boxSizing: "border-box",
         }}>
           {popupChrome(true)}
           <div style={{
@@ -293,7 +369,7 @@ export default function SelectionPopup({
             />
             <IconSettings style={{ color: "rgba(255,255,255,0.35)", flexShrink: 0 }} />
           </div>
-          <div className="peek-scroll" style={{ display: "flex", flexDirection: "column", maxHeight: 320, overflowY: "auto" }}>
+          <div className="peek-scroll" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, maxHeight: 320, overflowY: "auto" }}>
             {filteredActions.map((a, i) => {
               const Icon = a.icon;
               const active = i === paletteHighlight;
@@ -332,7 +408,7 @@ export default function SelectionPopup({
           display: "flex", flexDirection: "column", minHeight: 200,
           boxShadow: "0 14px 36px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.05)",
         }}>
-          {popupChrome(false)}
+          {popupChrome(false, true)}
           <div style={{
             display: "inline-flex", alignSelf: "flex-start", alignItems: "center", gap: 8,
             fontSize: 11.5, fontWeight: 600, color: LIGHT.muted, marginBottom: 14,
@@ -359,7 +435,7 @@ export default function SelectionPopup({
           maxHeight: tallViewMaxHeight,
           boxShadow: "0 14px 36px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.05)",
         }}>
-          {popupChrome(false)}
+          {popupChrome(false, true)}
           <textarea
             className="peek-scroll"
             value={edited}
@@ -403,6 +479,9 @@ export default function SelectionPopup({
                   borderRadius: 7, padding: "5px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
                 }}
               />
+              <button type="button" className="peek-interactive" onClick={onMinimize} title="Minimize — keeps your chat" style={{ ...closeBtnStyle, position: "static" }}>
+                <IconMinimize style={{ width: 14, height: 14 }} />
+              </button>
               <button type="button" className="peek-interactive" onClick={onClear} title="Close" style={{ ...closeBtnStyle, position: "static" }}>
                 <IconClose />
               </button>
