@@ -9,6 +9,7 @@ import { BACKEND_KEY, resolveBackend, modelKey } from "./backends.js";
 import { useInstalledBackends } from "./useInstalledBackends.js";
 import { IconClose, IconArrowUp, IconAttachment, IconMic, IconScanText, IconPin, IconMinimize, IconDownload, IconImage, IconChatTab } from "./Icons.jsx";
 import { OCR_PROMPT } from "./prompts.js";
+import { loadPlatformInfo } from "./accelFormat.js";
 
 const DRAG_EDGE_MARGIN = 80;
 const COMPACT_W = 380;
@@ -141,6 +142,8 @@ export default function Panel({
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrDone, setOcrDone] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [isMac, setIsMac] = useState(false); // ⌘ vs Ctrl in the minimize hint
+  useEffect(() => { loadPlatformInfo().then((info) => setIsMac(!!info.isMac)); }, []);
 
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
@@ -488,7 +491,7 @@ export default function Panel({
     <button
       className="peek-interactive"
       onClick={onMinimize}
-      title="Minimize (Ctrl ↓) — keep working, we'll notify you when the answer is ready"
+      title={`Minimize (${isMac ? "⌘" : "Ctrl"} ↓) — keep working, we'll notify you when the answer is ready`}
       style={{
         display: "flex", alignItems: "center", justifyContent: "center",
         width: light ? 28 : 30, height: light ? 28 : 30,

@@ -11,6 +11,7 @@ import { IconClose, IconPeek, IconSparkle } from "./Icons.jsx";
 
 import { BACKEND_KEY, resolveBackend, getModel, INSTALL_CLI_MESSAGE } from "./backends.js";
 import BackendsModal from "./BackendsModal.jsx";
+import { loadPlatformInfo } from "./accelFormat.js";
 
 const MIN_DRAG = 6; // px — below this a click is treated as a miss-click, not a selection
 const BUBBLE_SIZE = 52;
@@ -152,6 +153,7 @@ export default function App() {
   const [mode, setMode] = useState("idle");
   const [armed, setArmed] = useState(false);
   const [overlayMode, setOverlayMode] = useState("image"); // image | text | voice
+  const [isMac, setIsMac] = useState(false); // drives ⌘ vs Ctrl for the in-overlay arrow shortcuts + hints
   const [pickerImg, setPickerImg] = useState(null);
   const [ocrPanel, setOcrPanel] = useState(null); // null | { busy: true } | { text: string }
   const [saveShotBusy, setSaveShotBusy] = useState(false);
@@ -720,18 +722,28 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectionPopupVisible, ocrPanel, mode, minimized, bubbleHovered, showBackends, overlayMode, refineSessionActive, refineMinimized, refineProtect]);
 
-  // Ctrl + arrow keys drive the open chat bar from the keyboard:
+  // Which physical modifier drives the in-overlay arrow shortcuts: ⌘ (Cmd) on
+  // macOS, Ctrl elsewhere. On macOS Ctrl+←/→/↑ are reserved by the OS (Mission
+  // Control / Spaces), so binding Ctrl there would silently never fire — ⌘ is
+  // both free and the platform-native convention. Mirrors the global reopen
+  // shortcut (main.cjs binds CommandOrControl+↑, i.e. ⌘+↑ on Mac) and
+  // isSelectAllKeyEvent's `isMac ? metaKey : ctrlKey` pattern.
+  useEffect(() => {
+    loadPlatformInfo().then((info) => setIsMac(!!info.isMac));
+  }, []);
+
+  // Ctrl (⌘ on macOS) + arrow keys drive the open chat bar from the keyboard:
   //   ← / →  cycle the input mode (text → screenshot → voice)
   //   ↓      minimize the chat down to the bubble (text/image; voice isn't minimizable)
   //   ↑      reopen the minimized chat
   // ↓/←/→ act on an expanded chat; ↑ acts on a minimized one (it needs the
-  // overlay to still hold keyboard focus — true right after Ctrl+↓; otherwise
+  // overlay to still hold keyboard focus — true right after Ctrl/⌘+↓; otherwise
   // click the bubble). Switching to image hands off to the capture flow like a click.
   useEffect(() => {
     if (!armed || mode !== "panel") return;
     const order = ["text", "image", "voice"];
     const onKey = (e) => {
-      if (!e.ctrlKey) return;
+      if (!(isMac ? e.metaKey : e.ctrlKey)) return;
       if (e.key === "ArrowUp") {
         if (!minimized) return;
         e.preventDefault();
@@ -758,7 +770,7 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [armed, mode, minimized, overlayMode]);
+  }, [armed, mode, minimized, overlayMode, isMac]);
 
   // Mirror the "chat is minimized" state to main so it can bind the global
   // Ctrl/⌘+↑ reopen shortcut only while it's needed. Same condition as the
@@ -1221,8 +1233,8 @@ export default function App() {
           onMouseEnter={() => openHover()}
           onMouseLeave={closeHoverSoon}
           title={!armed ? "Click to activate Peek"
-            : mode === "panel" && minimized ? "Click or Ctrl ↑ to reopen chat · × to close Peek"
-            : mode === "panel" && overlayMode !== "voice" ? "Click or Ctrl ↓ to minimize chat · × to close Peek"
+            : mode === "panel" && minimized ? `Click or ${isMac ? "⌘" : "Ctrl"} ↑ to reopen chat · × to close Peek`
+            : mode === "panel" && overlayMode !== "voice" ? `Click or ${isMac ? "⌘" : "Ctrl"} ↓ to minimize chat · × to close Peek`
             : "Click to pause · × to close Peek"}
           style={{
             position: "fixed", left: bubbleLeft, top: bubblePos.y, width: bubbleWidth, height: BUBBLE_SIZE,
