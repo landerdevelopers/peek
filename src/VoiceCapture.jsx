@@ -4,6 +4,7 @@ import { useVoiceInput } from "./useVoiceInput.js";
 import { useInstalledBackends } from "./useInstalledBackends.js";
 import { BACKEND_KEY, resolveBackend, INSTALL_CLI_MESSAGE } from "./backends.js";
 import { IconMic, IconClose, IconImage, IconChatTab } from "./Icons.jsx";
+import { loadPlatformInfo } from "./accelFormat.js";
 
 const MODE_ITEMS = [
   { key: "text", Icon: IconChatTab, title: "Text" },
@@ -13,22 +14,26 @@ const MODE_ITEMS = [
 
 /**
  * Voice mode's whole UI — deliberately NOT the chat panel. A single floating
- * card: hold Ctrl (or press-and-hold the mic) to talk, release to send. Live
- * transcription streams in while you speak; on release the captured text is
- * sent as a one-shot query and the answer is shown below. No thread, no
- * composer — push-to-talk in, answer out.
+ * card: hold the primary modifier — ⌘ on macOS, Ctrl elsewhere — (or
+ * press-and-hold the mic) to talk, release to send. Live transcription streams
+ * in while you speak; on release the captured text is sent as a one-shot query
+ * and the answer is shown below. No thread, no composer — push-to-talk in,
+ * answer out.
  */
 export default function VoiceCapture({ onClose, onSwitchMode }) {
   const [transcript, setTranscript] = useState("");
   const [answer, setAnswer] = useState(null);
   const [asking, setAsking] = useState(false);
+  const [isMac, setIsMac] = useState(false); // ⌘ vs Ctrl for push-to-talk + its hint
   const [backend, setBackend] = useState(() => localStorage.getItem(BACKEND_KEY) || "");
   const { available: installedBackends, loading: backendsLoading } = useInstalledBackends();
   const { listening, voiceError, voiceLoading, toggleVoice, flushAndStop, stopVoice } = useVoiceInput(transcript, setTranscript);
 
   const boxRef = useRef(null);
-  const ctrlDownRef = useRef(false);
+  const pttDownRef = useRef(false); // primary modifier currently held for push-to-talk
   const capturingRef = useRef(false);
+
+  useEffect(() => { loadPlatformInfo().then((info) => setIsMac(!!info.isMac)); }, []);
 
   useEffect(() => {
     if (backendsLoading) return;
@@ -37,8 +42,9 @@ export default function VoiceCapture({ onClose, onSwitchMode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendsLoading, installedBackends]);
 
-  // Voice owns Ctrl for push-to-talk, so pause the global double-tap toggle
-  // for as long as this card is open (restored on unmount).
+  // Voice owns the primary modifier (⌘ on macOS, Ctrl elsewhere) for
+  // push-to-talk, so pause the global double-tap toggle for as long as this
+  // card is open (restored on unmount) — otherwise the taps would reopen/close Peek.
   useEffect(() => {
     window.peekDesktop.suppressHotkey?.(true);
     boxRef.current?.focus();
@@ -88,17 +94,20 @@ export default function VoiceCapture({ onClose, onSwitchMode }) {
     else startTalk();
   };
 
-  // Push-to-talk: hold Ctrl to record, release to send. keydown auto-repeats
-  // while held, so the ref guards against restarting on every repeat.
+  // Push-to-talk: hold the primary modifier (⌘ on macOS, Ctrl elsewhere) to
+  // record, release to send. Its KeyboardEvent.key is "Meta" on Mac, "Control"
+  // otherwise. keydown auto-repeats while held, so the ref guards against
+  // restarting on every repeat.
   useEffect(() => {
+    const pttKey = isMac ? "Meta" : "Control";
     const onDown = (e) => {
-      if (e.key !== "Control" || ctrlDownRef.current) return;
-      ctrlDownRef.current = true;
+      if (e.key !== pttKey || pttDownRef.current) return;
+      pttDownRef.current = true;
       startTalk();
     };
     const onUp = (e) => {
-      if (e.key !== "Control") return;
-      ctrlDownRef.current = false;
+      if (e.key !== pttKey) return;
+      pttDownRef.current = false;
       stopTalk();
     };
     window.addEventListener("keydown", onDown);
@@ -108,12 +117,12 @@ export default function VoiceCapture({ onClose, onSwitchMode }) {
       window.removeEventListener("keyup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listening, asking]);
+  }, [listening, asking, isMac]);
 
   const status = voiceLoading ? "Starting…"
     : listening ? "Listening… click to stop"
     : asking ? "Thinking…"
-    : "Click the mic or hold Ctrl to talk";
+    : `Click the mic or hold ${isMac ? "⌘" : "Ctrl"} to talk`;
 
   return (
     <div
