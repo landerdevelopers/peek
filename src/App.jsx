@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import Panel from "./Panel.jsx";
-import VoiceCapture from "./VoiceCapture.jsx";
 import BubbleStrip from "./BubbleStrip.jsx";
 import SelectionPopup from "./SelectionPopup.jsx";
 import ImageOcrPanel from "./ImageOcrPanel.jsx";
@@ -619,23 +618,11 @@ export default function App() {
     }
   };
 
-  // In-panel quick switch — jump between the chat bar, screenshot capture,
-  // and voice without going back to the bubble menu (see Panel's ModeSwitch).
-  // Text <-> Image swap in place: the same Panel stays mounted (no key bump,
-  // no bounce through the bubble), so only the inner mode tab + content
-  // transition — the chat bar itself never reloads. Voice uses a separate
-  // card, so those transitions still mount/unmount (both fade).
+  // In-panel quick switch — text, image, and voice all swap in place on the
+  // same Panel shell; width eases between compact voice (186px) and text (380px).
   const switchMode = (m) => {
     if (mode === "panel" && m === overlayMode) return;
-    if (m === "voice") { chooseVoice(); return; }
     if (mode === "panel") {
-      // Pure in-place swap for ANY open panel — text, image, OR voice. Just
-      // flip overlayMode: the chat shell stays mounted for text<->image, and
-      // leaving voice unmounts the VoiceCapture card (its render is gated on
-      // overlayMode === "voice") while mounting the Panel fresh. No screenshot
-      // grab, no remount bounce through the bubble — that heavy path (via
-      // chooseText/chooseImage -> replaceActiveSession) was why switching out
-      // of voice didn't land.
       setPickerImg(null);
       setPanelData(null);
       setSelectionRect(null);
@@ -644,6 +631,7 @@ export default function App() {
       return;
     }
     if (m === "image") chooseImage();
+    else if (m === "voice") chooseVoice();
     else chooseText();
   };
 
@@ -1183,11 +1171,7 @@ export default function App() {
         />
       )}
 
-      {armed && mode === "panel" && overlayMode === "voice" && !isDragging && (
-        <VoiceCapture onClose={endPanel} onSwitchMode={switchMode} />
-      )}
-
-      {armed && mode === "panel" && overlayMode !== "voice" && !isDragging && (
+      {armed && mode === "panel" && !isDragging && (
         <div
           style={{
             position: "fixed", inset: 0, zIndex: Z.PANEL,

@@ -10,6 +10,7 @@ import { useInstalledBackends } from "./useInstalledBackends.js";
 import { IconClose, IconArrowUp, IconAttachment, IconMic, IconScanText, IconPin, IconMinimize, IconDownload, IconImage, IconChatTab } from "./Icons.jsx";
 import { OCR_PROMPT } from "./prompts.js";
 import { loadPlatformInfo } from "./accelFormat.js";
+import { VoiceBar, VOICE_COMPACT_W } from "./VoiceCapture.jsx";
 
 const DRAG_EDGE_MARGIN = 80;
 const COMPACT_W = 380;
@@ -226,16 +227,6 @@ export default function Panel({
     onHasContentChange?.(thread.length > 0 || busy || input.trim().length > 0);
   }, [thread, busy, input, onHasContentChange]);
 
-  // Voice mode auto-starts listening once you've actually expanded past the
-  // bubble — no manual mic click needed to begin dictating, but it doesn't
-  // start talking into a bubble you haven't opened yet. Guards on `listening`
-  // itself (read fresh, not a dependency) so re-expanding after a minimize
-  // doesn't re-toggle an already-running session back off.
-  useEffect(() => {
-    if (mode === "voice" && !minimized && !listening) toggleVoice();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, minimized]);
-
   const onPickSession = async (id) => {
     if (!id) { setSessionId(null); setThread([]); return; }
     const s = await window.peekDesktop.sessions.get(id);
@@ -371,10 +362,11 @@ export default function Panel({
   // Once the text/image bar is open, keep the composer shell stable — clicking
   // a mode tab blurs the textarea, and without this that collapse would flash
   // the whole chatbar dark/light on every text ↔ image switch.
+  const isVoiceCompact = mode === "voice";
   const pinnedComposer = !minimized && (mode === "text" || mode === "image");
-  const expanded = focused || input.trim().length > 0 || busy || hasThread || mode === "voice" || pinnedComposer;
-  const isMinimal = !expanded;
-  const panelWidth = isMinimal ? COMPACT_W : EXPANDED_W;
+  const expanded = focused || input.trim().length > 0 || busy || hasThread || pinnedComposer;
+  const isMinimal = !expanded && !isVoiceCompact;
+  const panelWidth = isVoiceCompact ? VOICE_COMPACT_W : (isMinimal ? COMPACT_W : EXPANDED_W);
 
   useEffect(() => {
     if (expanded && !minimized) inputRef.current?.focus();
@@ -387,10 +379,13 @@ export default function Panel({
     + (showImageCropActions ? CROP_ACTIONS_EXTRA : 0);
 
   if (prevModeRef.current !== mode) {
+    // Voice width is much narrower — clear any frozen layout so the bar can
+    // ease between text (380) and voice (186) instead of jumping.
+    if (mode === "voice" || prevModeRef.current === "voice") layoutFreezeRef.current = null;
     const tabSwitch = (prevModeRef.current === "text" || prevModeRef.current === "image")
       && (mode === "text" || mode === "image");
     if (tabSwitch && layoutAnchorRef.current) layoutFreezeRef.current = layoutAnchorRef.current;
-    else if (!tabSwitch) layoutFreezeRef.current = null;
+    else if (!tabSwitch && mode !== "voice" && prevModeRef.current !== "voice") layoutFreezeRef.current = null;
     prevModeRef.current = mode;
   }
   if (selectionRect) layoutFreezeRef.current = null;
@@ -419,7 +414,7 @@ export default function Panel({
     alignItems: "stretch",
     gap: 8,
     cursor: "default",
-    transition: "width 0.28s cubic-bezier(0.22, 1, 0.36, 1), top 0.28s cubic-bezier(0.22, 1, 0.36, 1), left 0.28s cubic-bezier(0.22, 1, 0.36, 1), transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), bottom 0.28s cubic-bezier(0.22, 1, 0.36, 1)",
+    transition: "width 0.32s cubic-bezier(0.22, 1, 0.36, 1), top 0.32s cubic-bezier(0.22, 1, 0.36, 1), left 0.32s cubic-bezier(0.22, 1, 0.36, 1), transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), bottom 0.32s cubic-bezier(0.22, 1, 0.36, 1)",
   };
 
   const shellStyle = {
@@ -428,8 +423,14 @@ export default function Panel({
     cursor: "default",
     display: "flex",
     flexDirection: "column",
-    transition: "width 0.28s cubic-bezier(0.22, 1, 0.36, 1), max-height 0.28s ease, box-shadow 0.28s ease, background 0.28s ease, border-radius 0.28s ease",
-    ...(isMinimal ? {
+    transition: "width 0.32s cubic-bezier(0.22, 1, 0.36, 1), max-height 0.32s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.28s ease, background 0.28s ease, border-radius 0.28s ease",
+    ...(isVoiceCompact ? {
+      background: "#FFFFFF",
+      borderRadius: 14,
+      overflow: "visible",
+      border: "1px solid rgba(0,0,0,0.09)",
+      boxShadow: "0 14px 40px rgba(0,0,0,0.38), 0 0 0 1px rgba(255,255,255,0.6)",
+    } : isMinimal ? {
       background: "#17171B",
       borderRadius: 14,
       overflow: "visible",
@@ -610,7 +611,9 @@ export default function Panel({
       ref={panelRef}
       style={shellStyle}
     >
-      {isMinimal ? (
+      {isVoiceCompact ? (
+        <VoiceBar onSwitchMode={onSwitchMode} />
+      ) : isMinimal ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 10px 9px 12px" }}>
           {onSwitchMode && modeSwitchEl(true)}
           {composerTextarea(true)}
@@ -623,12 +626,6 @@ export default function Panel({
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {onSwitchMode && modeSwitchEl(false)}
             {composerTextarea(false)}
-            {mode === "voice" && (
-              <PillIconBtn
-                title={listening ? "Stop listening" : "Start listening"}
-                onClick={toggleVoice} active={listening}
-              ><IconMic /></PillIconBtn>
-            )}
             {sendBtn(false)}
             {minimizeBtn(true)}
             {pinBtn(true)}
