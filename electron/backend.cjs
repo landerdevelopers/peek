@@ -14,6 +14,7 @@ const { join } = require("node:path");
 const registry = require("./backendRegistry.cjs");
 const { buildCliPrompt } = require("./messageBuilder.cjs");
 const apiBackends = require("./apiBackends.cjs");
+const { ensureCliPath } = require("./macPath.cjs");
 
 function askClaude(prompt, { model, timeoutMs = 90_000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -147,6 +148,7 @@ function askGeminiCli(prompt, { model, timeoutMs = 90_000 } = {}) {
 }
 
 async function ask(payload = {}) {
+  ensureCliPath(); // macOS: make sure spawn() sees Homebrew/npm/nvm CLIs, not just launchd's minimal PATH
   const { backend: id = "claude", imagePath, model } = payload;
   const d = registry.get(id) || registry.get("claude");
   // Explicit per-backend model wins; otherwise fall back to the legacy env var.

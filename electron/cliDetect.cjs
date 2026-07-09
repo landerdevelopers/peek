@@ -20,6 +20,7 @@ const { promisify } = require("node:util");
 const registry = require("./backendRegistry.cjs");
 const secrets = require("./secrets.cjs");
 const apiBackends = require("./apiBackends.cjs");
+const { ensureCliPath } = require("./macPath.cjs");
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +38,7 @@ function commandExists(cmd) {
 }
 
 async function detectBackends() {
+  ensureCliPath(); // on macOS, restore the user's real shell PATH so `which` finds GUI-invisible CLIs
   const cliDescriptors = registry.all().filter((d) => d.kind === "cli");
   const cliFound = {};
   await Promise.all(cliDescriptors.map(async (d) => { cliFound[d.id] = await commandExists(d.command); }));

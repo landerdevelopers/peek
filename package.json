@@ -38,7 +38,8 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Peek uses your microphone to transcribe voice questions locally on your device."
+        "NSMicrophoneUsageDescription": "Peek uses your microphone to transcribe voice questions locally on your device.",
+        "NSAppleEventsUsageDescription": "Peek uses Apple Events to return focus to your previous app so it can paste refined text back where you selected it."
       }
     },
     "nsis": {

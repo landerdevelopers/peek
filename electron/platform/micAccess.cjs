@@ -13,6 +13,16 @@ async function ensureMicrophoneAccess() {
   return true;
 }
 
+// "granted" | "denied" | "restricted" | "not-determined" on macOS; always
+// "granted" elsewhere. Lets callers tell whether a request will actually show a
+// system permission sheet (only when "not-determined") vs. resolve silently.
+function getMicrophoneAccessStatus() {
+  if (process.platform === "darwin") {
+    return systemPreferences.getMediaAccessStatus("microphone");
+  }
+  return "granted";
+}
+
 function openMicrophoneSettings() {
   if (process.platform === "darwin") {
     shell.openExternal(
@@ -25,4 +35,4 @@ function openMicrophoneSettings() {
   }
 }
 
-module.exports = { ensureMicrophoneAccess, openMicrophoneSettings };
+module.exports = { ensureMicrophoneAccess, getMicrophoneAccessStatus, openMicrophoneSettings };

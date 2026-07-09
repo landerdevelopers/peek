@@ -12,5 +12,10 @@
   <true/>
   <key>com.apple.security.device.camera</key>
   <true/>
+  <!-- Refine "replace in place" and browser-URL context use osascript / Apple
+       Events to re-focus the previous app; a hardened-runtime build needs this
+       entitlement or those Apple Events are blocked. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>

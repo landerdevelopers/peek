@@ -11,6 +11,8 @@ const backendRegistry = require("./backendRegistry.cjs");
 const store = require("./store.cjs");
 const platform = require("./platform/index.cjs");
 const micAccess = require("./platform/micAccess.cjs");
+const screenAccess = require("./platform/screenAccess.cjs");
+const { ensureCliPath } = require("./macPath.cjs");
 const { createScreenCoords } = require("./screenCoords.cjs");
 const ocr = require("./ocr.cjs");
 const textExport = require("./export.cjs");
@@ -133,9 +135,33 @@ function ensureMacAccessibilityForOverlay() {
 
   new Notification({
     title: "Peek needs Accessibility",
-    body: "Enable Peek in System Settings → Privacy & Security → Accessibility, then press the hotkey again.",
+    // uIOhook only starts receiving global keys AFTER a relaunch once the
+    // permission is granted, so "press the hotkey again" would be wrong here.
+    body: "Enable Peek in System Settings → Privacy & Security → Accessibility, then quit and reopen Peek.",
   }).show();
   // Leave overlay hidden so System Settings stays clickable.
+  return false;
+}
+
+// macOS: screen capture silently returns a wallpaper-only frame until the user
+// grants Screen Recording (and relaunches). Warn once per run and open the
+// right settings pane so the core image/OCR feature doesn't just fail blankly.
+// Returns true when capture can proceed (always true off macOS).
+let screenAccessWarned = false;
+function ensureScreenAccessOrWarn() {
+  if (!platform.isMac) return true;
+  if (screenAccess.hasScreenAccess()) return true;
+  if (!screenAccessWarned) {
+    screenAccessWarned = true;
+    const resume = suspendOverlayForSystemUI();
+    new Notification({
+      title: "Peek needs Screen Recording",
+      body: "Enable Peek in System Settings → Privacy & Security → Screen Recording, then quit and reopen Peek.",
+    }).show();
+    screenAccess.openScreenSettings();
+    // Leave the overlay suspended briefly so System Settings stays clickable.
+    setTimeout(resume, 400);
+  }
   return false;
 }
 
@@ -757,6 +783,7 @@ ipcMain.handle("peek:select", (_e, sel) => {
 // and records the desktop behind it, so switching into Image mode is seamless.
 ipcMain.handle("peek:capture-silent", async () => {
   if (!overlayWin || overlayWin.isDestroyed()) return null;
+  if (!ensureScreenAccessOrWarn()) return null;
   try {
     overlayWin.setContentProtection(true);
     // Give the compositor a frame or two to apply the capture-exclusion before
@@ -771,6 +798,7 @@ ipcMain.handle("peek:capture-silent", async () => {
 
 ipcMain.handle("peek:capture-now", async () => {
   if (!overlayWin) return null;
+  if (!ensureScreenAccessOrWarn()) return null;
   const wasVisible = overlayWin.isVisible();
   if (wasVisible) suppressOverlayBlurReport = true;
   try {
@@ -965,7 +993,16 @@ ipcMain.handle("peek:ensure-mic-access", async () => {
   if (process.platform !== "darwin") {
     return micAccess.ensureMicrophoneAccess();
   }
-  const resume = suspendOverlayForSystemUI();
+  // A sheet only appears on the FIRST request ("not-determined"). Once mic is
+  // already granted/denied there's nothing to hide the overlay for — suspending
+  // regardless was popping the dashboard to the front on every push-to-talk (⌘
+  // to talk kept re-opening the dashboard). So only suspend when a sheet is
+  // actually coming, and even then don't yank the dashboard forward
+  // (focusDashboard: false) — the OS prompt is a system dialog, clickable anyway.
+  if (micAccess.getMicrophoneAccessStatus() !== "not-determined") {
+    return micAccess.ensureMicrophoneAccess();
+  }
+  const resume = suspendOverlayForSystemUI({ focusDashboard: false });
   try {
     return await micAccess.ensureMicrophoneAccess();
   } finally {
@@ -1191,11 +1228,19 @@ const fmtAccel = (acc) => platform.formatAccelerator(acc);
 // Shared by the tray checkbox and the dashboard Settings toggle — both just
 // flip the same OS login-item registration.
 function setLoginItem(openAtLogin) {
-  app.setLoginItemSettings({
-    openAtLogin,
-    path: process.execPath,
-    args: app.isPackaged ? [] : [path.join(__dirname, "..")],
-  });
+  if (process.platform === "darwin") {
+    // On macOS the modern Service Management API registers the .app bundle from
+    // just { openAtLogin }. Passing path: process.execPath points at the inner
+    // Mach-O helper (Peek.app/Contents/MacOS/Peek), which can create a stray /
+    // duplicate login item, so keep path/args to Windows/Linux only.
+    app.setLoginItemSettings({ openAtLogin });
+  } else {
+    app.setLoginItemSettings({
+      openAtLogin,
+      path: process.execPath,
+      args: app.isPackaged ? [] : [path.join(__dirname, "..")],
+    });
+  }
   refreshTray();
 }
 
@@ -1243,6 +1288,10 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     if (process.platform === "win32") app.setAppUserModelId("com.peek.overlay");
+    // macOS: a Finder/Dock/login launch inherits only launchd's minimal PATH,
+    // so restore the user's real shell PATH up front — before detection or any
+    // CLI spawn — or every CLI backend looks "not installed" (no-op elsewhere).
+    ensureCliPath();
     const allowMedia = (permission, details) => {
       if (permission === "notifications") return true;
       if (permission === "media" || permission === "audioCapture" || permission === "videoCapture") return true;
